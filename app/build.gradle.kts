@@ -10,7 +10,7 @@ val localProperties = Properties().apply {
     if (propertiesFile.exists()) propertiesFile.inputStream().use(::load)
 }
 val youtubeApiKey = localProperties.getProperty("YOUTUBE_API_KEY", "")
-val googleWebClientId = localProperties.getProperty("GOOGLE_WEB_CLIENT_ID", "")
+fun buildConfigString(value: String) = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r") + "\""
 
 android {
     namespace = "com.example.app"
@@ -24,14 +24,11 @@ android {
         applicationId = "com.example.app"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        buildConfigField("String", "YOUTUBE_API_KEY", "\"$youtubeApiKey\"")
-        // OAuth web client ID used to mint an ID token for the app's backend.
-        // Keep this in local.properties; it must not be the Android client ID.
-        buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWebClientId\"")
+        buildConfigField("String", "YOUTUBE_API_KEY", buildConfigString(youtubeApiKey))
     }
 
     buildTypes {
@@ -64,9 +61,13 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.session)
+    implementation(libs.androidx.media3.ui)
+    implementation(libs.androidx.media3.exoplayer.hls)
+    implementation(libs.androidx.media3.exoplayer.dash)
     implementation(libs.kotlinx.coroutines.guava)
     implementation(libs.google.play.services.auth)
     testImplementation(libs.junit)
+    testImplementation("org.json:json:20240303")
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)

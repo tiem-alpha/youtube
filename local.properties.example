@@ -3,6 +3,5 @@
 sdk.dir=C\:\\Users\\your-user\\AppData\\Local\\Android\\Sdk
 YOUTUBE_API_KEY=
 
-## OAuth 2.0 "Web application" client ID, only required if your backend
-## verifies Google ID tokens. Do not put the Android OAuth client ID here.
-GOOGLE_WEB_CLIENT_ID=
+## Google connection uses an Android OAuth client registered in Google Cloud.
+## No Web client ID or backend is required. See GOOGLE_SIGNIN_SETUP.md.

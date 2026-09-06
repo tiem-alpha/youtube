@@ -12,25 +12,25 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
 
 private val DarkColorScheme = darkColorScheme(
-    primary = Purple80,
-    secondary = PurpleGrey80,
-    tertiary = Pink80
+    primary = androidx.compose.ui.graphics.Color(0xFF87D3F2),
+    onPrimary = androidx.compose.ui.graphics.Color(0xFF003548),
+    primaryContainer = androidx.compose.ui.graphics.Color(0xFF174D65),
+    secondaryContainer = androidx.compose.ui.graphics.Color(0xFF214859),
+    background = androidx.compose.ui.graphics.Color(0xFF0E171C),
+    surface = androidx.compose.ui.graphics.Color(0xFF111C22),
+    surfaceContainer = androidx.compose.ui.graphics.Color(0xFF192930)
 )
-
 private val LightColorScheme = lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40
-
-    /* Other default colors to override
-    background = Color(0xFFFFFBFE),
-    surface = Color(0xFFFFFBFE),
-    onPrimary = Color.White,
-    onSecondary = Color.White,
-    onTertiary = Color.White,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
-    */
+    primary = androidx.compose.ui.graphics.Color(0xFF006B91),
+    onPrimary = androidx.compose.ui.graphics.Color.White,
+    primaryContainer = androidx.compose.ui.graphics.Color(0xFFBCEAFF),
+    secondaryContainer = androidx.compose.ui.graphics.Color(0xFFD5F1FC),
+    background = androidx.compose.ui.graphics.Color(0xFFF8FCFF),
+    surface = androidx.compose.ui.graphics.Color(0xFFF8FCFF),
+    surfaceContainer = androidx.compose.ui.graphics.Color(0xFFEAF6FC),
+    surfaceContainerHighest = androidx.compose.ui.graphics.Color(0xFFDDEFF7),
+    onSurface = androidx.compose.ui.graphics.Color(0xFF14232B),
+    onSurfaceVariant = androidx.compose.ui.graphics.Color(0xFF49616D)
 )
 
 @Composable
