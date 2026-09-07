@@ -9,6 +9,31 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class HoldToMinimizeTest {
+    @Test fun miniPlayerTapAndUpwardSwipeExpandWithoutSendingTouchesToVideo() = scenario { layout, actions, send ->
+        var expanded = 0
+        layout.onExpand = { expanded++ }
+        send(MotionEvent.ACTION_DOWN, 0, 50f, 500f)
+        send(MotionEvent.ACTION_UP, 50, 50f, 500f)
+        assertEquals(1, expanded)
+        send(MotionEvent.ACTION_DOWN, 0, 50f, 500f)
+        send(MotionEvent.ACTION_MOVE, 30, 50f, 50f)
+        send(MotionEvent.ACTION_UP, 60, 50f, 50f)
+        assertEquals(2, expanded)
+        assertTrue(actions.isEmpty())
+    }
+
+    @Test fun miniPlayerDownwardAndCancelledGesturesDoNotExpand() = scenario { layout, _, send ->
+        var expanded = false
+        layout.onExpand = { expanded = true }
+        send(MotionEvent.ACTION_DOWN, 0, 50f, 50f)
+        send(MotionEvent.ACTION_MOVE, 30, 50f, 500f)
+        send(MotionEvent.ACTION_UP, 60, 50f, 500f)
+        send(MotionEvent.ACTION_DOWN, 0, 50f, 500f)
+        send(MotionEvent.ACTION_MOVE, 30, 50f, 50f)
+        send(MotionEvent.ACTION_CANCEL, 60, 50f, 50f)
+        assertFalse(expanded)
+    }
+
     private fun scenario(block: (HoldToMinimizeLayout, MutableList<Int>, (Int, Long, Float, Float) -> Unit) -> Unit) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         instrumentation.runOnMainSync {
@@ -44,16 +69,27 @@ class HoldToMinimizeTest {
         assertEquals(1, minimized); assertEquals(0f, offset, 0.001f)
     }
 
-    @Test fun quickSwipeAndTapRemainWithPlayer() = scenario { layout, actions, send ->
+    @Test fun quickDownwardSwipeMinimizesAndTapRemainsWithPlayer() = scenario { layout, actions, send ->
         var minimized = false
         layout.onMinimize = { minimized = true }
         send(MotionEvent.ACTION_DOWN, 0, 50f, 50f)
         send(MotionEvent.ACTION_MOVE, 20, 50f, 500f)
         send(MotionEvent.ACTION_UP, 1000, 50f, 500f)
-        assertFalse(minimized); assertFalse(actions.contains(MotionEvent.ACTION_CANCEL))
+        assertTrue(minimized); assertTrue(actions.contains(MotionEvent.ACTION_CANCEL))
         send(MotionEvent.ACTION_DOWN, 0, 50f, 50f)
         send(MotionEvent.ACTION_UP, 50, 50f, 50f)
         assertEquals(MotionEvent.ACTION_UP, actions.last())
+    }
+
+    @Test fun shortDragReturnsToPlayerWithoutMinimizing() = scenario { layout, _, send ->
+        var minimized = false
+        var offset = 0f
+        layout.onMinimize = { minimized = true }; layout.onDrag = { offset = it }
+        val distance = 32 * layout.resources.displayMetrics.density
+        send(MotionEvent.ACTION_DOWN, 0, 50f, 50f)
+        send(MotionEvent.ACTION_MOVE, 20, 50f, 50f + distance)
+        send(MotionEvent.ACTION_UP, 40, 50f, 50f + distance)
+        assertFalse(minimized); assertEquals(0f, offset, 0.001f)
     }
 
     @Test fun cancelledDragResetsOffsetWithoutMinimizing() = scenario { layout, _, send ->

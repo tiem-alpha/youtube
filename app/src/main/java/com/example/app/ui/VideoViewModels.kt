@@ -140,14 +140,23 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+    fun toggleLater(video: VideoResult) {
+        library.toggleLater(video)
+        notify(if (library.state.value.watchLater.any { it.id == video.id }) "Đã thêm vào hàng đợi xem sau trong Thư viện." else "Đã bỏ khỏi xem sau.")
+    }
+    fun recoverFeed() {
+        if (_state.value.loading) return
+        load(_state.value.request, refresh = _state.value.message != null)
+    }
     fun notify(message: String?) { _notice.value = message }
     fun load(request: FeedRequest, refresh: Boolean = false) {
         feedJob?.cancel()
         cacheCurrentFeed()
-        val cached = feedCache[request]
+        val previous = _state.value.takeIf { it.request == request && it.videos.isNotEmpty() }
+        val cached = previous ?: feedCache[request]
         val fresh = System.currentTimeMillis() - (feedCachedAt[request] ?: 0) in 0 until 10 * 60_000L
-        _state.value = cached?.copy(loading = false, message = null) ?: SearchUiState(request = request, loading = true)
-        if (!refresh && cached != null && cached.message == null && fresh && !request.liveOnly && !request.requiresAccount) return
+        _state.value = cached?.copy(loading = true, message = null) ?: SearchUiState(request = request, loading = true)
+        if (!refresh && cached != null && cached.message == null && fresh && !request.liveOnly && !request.requiresAccount) { _state.value = cached.copy(loading = false); return }
         feedJob = viewModelScope.launch {
             if (request.kind == FeedKind.Home) {
                 if (refresh) signalsLoadedAt = 0
@@ -206,15 +215,29 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun fetch(append: Boolean) {
         val current = _state.value
         try {
+            // Give silent Google restoration time to finish before issuing token-only requests.
+            if (settings.getBoolean("reconnect", false) && !hasSession() &&
+                settings.getString("apiKey", null).isNullOrBlank() && BuildConfig.YOUTUBE_API_KEY.isBlank()) {
+                kotlinx.coroutines.withTimeoutOrNull(8_000) {
+                    while (!hasSession()) kotlinx.coroutines.delay(100)
+                }
+                if (!hasSession()) {
+                    _state.value = current.copy(loading = false,
+                        message = "Chưa khôi phục được kết nối Google. Kiểm tra mạng hoặc kết nối lại trong Tài khoản.")
+                    return
+                }
+            }
             if (current.request.kind == FeedKind.Home) {
-                fetchHome(current, append)
+                kotlinx.coroutines.withTimeout(30_000) { fetchHome(current, append) }
                 return
             }
-            val page = repository.feed(current.request, if (append) current.nextToken else null)
+            val page = kotlinx.coroutines.withTimeout(30_000) { repository.feed(current.request, if (append) current.nextToken else null) }
             _state.value = current.copy(videos = ((if (append) current.videos else emptyList()) + page.items).distinctBy { it.playlistItemId.ifBlank { it.id } }, nextToken = page.nextToken, loading = false)
             feedCachedAt[current.request] = System.currentTimeMillis()
             val saved = _state.value
             withContext(Dispatchers.IO) { diskFeeds.write(current.request, Page(saved.videos, saved.nextToken)) }
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            _state.value = current.copy(loading = false, message = "Tải video quá lâu. Hãy thử lại.")
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) { _state.value = current.copy(loading = false, message = errorMessage(e)) }
     }

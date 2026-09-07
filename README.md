@@ -5,7 +5,7 @@
 ## Giao diện và phát video
 
 - Trong từng video, bấm bánh răng **Cài đặt video → Hẹn giờ tắt · Duration** để chọn **30 / 60 / 90 / 120 phút** hoặc hủy. Đồng hồ đếm ngược hiện cạnh bánh răng. Hẹn giờ chạy trong dịch vụ khi đang phát, giữ khi thu nhỏ/đổi video và hủy khi đóng video.
-- Kéo xuống trên thanh tiêu đề trình phát hoặc bấm mũi tên xuống để quay lại danh sách. Video tiếp tục phát ở cuối màn hình; bấm mũi tên lên để mở rộng. Trình phát nhúng giữ chiều cao tối thiểu 200 dp theo [yêu cầu IFrame của YouTube](https://developers.google.com/youtube/iframe_api_reference).
+- Kéo video xuống hoặc bấm mũi tên xuống để quay lại danh sách. Video tiếp tục phát trong thanh nhỏ cao 90 dp ở cuối màn hình, với khung hình 160 × 90 dp. Chạm vào khung hình/tiêu đề hoặc vuốt lên để trở lại màn hình xem chính video đó; phiên phát được giữ nguyên.
 - Bấm biểu tượng tìm kiếm để mở ô nhập; biểu tượng micro mở nhận dạng giọng nói của Android. Thiết bị cần có dịch vụ nhận dạng giọng nói.
 - Home là danh sách native với tông xanh lam nhạt, không tải trang YouTube/WebView. Gợi ý riêng của app dùng lịch sử xem ghi nhận theo tài khoản trong app và video đã thích: tối đa hai truy vấn chủ đề từ tiêu đề (dự phòng bằng danh mục), một kênh thường xem gần đây, hai kênh đăng ký và một nguồn phổ biến tại Việt Nam. Kết quả được xen kẽ, loại trùng và bỏ video đã xem/đã thích. Tìm kiếm thông thường vẫn giữ thứ tự Data API.
 - Kết nối Google bằng biểu tượng tài khoản của app để thêm video đã thích và kênh đăng ký. Thuật toán chỉ xét tối đa 200 kênh đăng ký, xoay vòng kênh mỗi cửa sổ 10 phút; tối đa sáu nguồn video mỗi trang. Đây không phải thuật toán hoặc feed HOME chính thức của YouTube. API không cung cấp lịch sử xem YouTube bên ngoài app ([thay đổi API](https://developers.google.com/youtube/v3/revision_history)). Lịch sử dùng cho gợi ý bắt đầu được ghi riêng cho từng tài khoản từ bản này; lịch sử trên máy trước đó vẫn nằm trong Thư viện.
@@ -13,7 +13,9 @@
 
 Màn hình xem hiển thị avatar kênh và một bình luận xem trước (tối đa hai dòng). Bấm **Xem thêm bình luận** để đọc đầy đủ, tải tiếp hoặc viết bình luận; bấm **Thu gọn** hoặc Back để quay lại thông tin/video cùng chủ đề. Video cùng chủ đề tự tải bằng tìm kiếm tiêu đề qua Data API, giữ thứ tự kết quả và bỏ video đang xem; đây không phải danh sách gợi ý cá nhân của YouTube.
 
-Giữ trên vùng video rồi kéo xuống ít nhất 64dp và thả để thu nhỏ; trình phát di chuyển theo ngón tay và giữ nguyên phiên phát. Chạm nhanh và kéo tua ngang vẫn chuyển đến trình phát. Có thể kéo thanh tiêu đề hoặc dùng nút thu nhỏ như trước. Cơ chế nhận thao tác dựa trên [xử lý touch của Android](https://developer.android.com/develop/ui/views/touch-and-input/gestures/viewgroup).
+Kéo xuống trực tiếp trên vùng video ít nhất 64dp rồi thả để thu nhỏ; trình phát di chuyển theo ngón tay và giữ nguyên phiên phát. Chạm nhanh và kéo tua ngang vẫn chuyển đến trình phát. Có thể kéo thanh tiêu đề hoặc dùng nút thu nhỏ như trước. Nút dấu trang trên thanh video thêm/bỏ video trong hàng đợi **Xem sau** tại Thư viện, kể cả khi thu nhỏ.
+
+Kéo xuống ở đầu danh sách Home để làm mới. App kiểm tra lại danh sách và thử khôi phục Google khi quay lại ứng dụng hoặc mạng được xác nhận có Internet. Danh sách đã tải được giữ trong khi làm mới và khi lỗi mạng; thanh tiến trình cho biết đang tải. Trình phát tải quá lâu có nút thử lại và tự thử lại lỗi kết nối khi mạng trở lại, dùng vị trí đã ghi nhận gần nhất.
 
 Bản sửa đã build và chạy unit test/lint; thao tác WebView, kéo thu nhỏ, giọng nói, timer khi khóa màn hình và thông báo vẫn cần kiểm thử trên Android thật.
 

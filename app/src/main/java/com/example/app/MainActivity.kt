@@ -71,6 +71,8 @@ private fun VideoApp(incoming: String?, inPip: Boolean, consumed: () -> Unit, vm
         val youtubeChannel by vm.youtubeChannel.collectAsState()
         val notice by vm.notice.collectAsState()
         val auth = rememberYouTubeAuthorization(vm)
+        val recovery = rememberRecoveryTrigger()
+        LaunchedEffect(recovery) { vm.recoverFeed() }
         var route by rememberSaveable { mutableStateOf("home") }
         var backStack by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
         val screenStates = rememberSaveableStateHolder()
@@ -194,7 +196,7 @@ private fun VideoApp(incoming: String?, inPip: Boolean, consumed: () -> Unit, vm
             Box(Modifier.padding(padding).fillMaxSize()) {
             val modifier = Modifier.fillMaxSize().padding(
                 top = if (activeVideo != null && route == "watch") 284.dp else 0.dp,
-                bottom = if (activeVideo != null && route != "watch") 248.dp else 0.dp)
+                bottom = if (activeVideo != null && route != "watch") 90.dp else 0.dp)
             screenStates.SaveableStateProvider(route) {
             when (route) {
                 "home" -> Column(modifier) {
@@ -215,7 +217,13 @@ private fun VideoApp(incoming: String?, inPip: Boolean, consumed: () -> Unit, vm
                     if (state.videos.isEmpty() && !state.loading && library.searches.isNotEmpty()) Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
                         library.searches.take(5).forEach { term -> TextButton({ query = term; vm.search(term) }) { Text(term) } }
                     }
-                    FeedList(state, Modifier.weight(1f), vm::more, vm::retry, ::openVideo, vm.library::toggleLater)
+                    androidx.compose.material3.pulltorefresh.PullToRefreshBox(
+                        isRefreshing = state.loading,
+                        onRefresh = { if (!state.loading) vm.load(state.request, refresh = true) },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        FeedList(state, Modifier.fillMaxSize(), vm::more, vm::retry, ::openVideo, vm::toggleLater)
+                    }
                 }
                 "shorts" -> ShortsScreen(vm, modifier, ::openVideo)
                 "subscriptions" -> SubscriptionsScreen(vm, auth, modifier, ::openChannel)
@@ -243,24 +251,29 @@ private fun VideoApp(incoming: String?, inPip: Boolean, consumed: () -> Unit, vm
                 val threshold = with(LocalDensity.current) { 48.dp.toPx() }
                 Surface(Modifier.align(if (expanded) Alignment.TopCenter else Alignment.BottomCenter).offset { androidx.compose.ui.unit.IntOffset(0, playerDrag.toInt()) }.fillMaxWidth(),
                     tonalElevation = 3.dp, shadowElevation = 4.dp) {
-                    Column {
-                        Row(Modifier.fillMaxWidth().height(48.dp).pointerInput(expanded) {
+                    androidx.compose.ui.layout.Layout(content = {
+                        Row(Modifier.fillMaxWidth().height(if (expanded) 48.dp else 90.dp)
+                            .clickable(enabled = !expanded) { push(); route = "watch" }.pointerInput(expanded) {
                             var drag = 0f
                             detectVerticalDragGestures(onDragStart = { drag = 0f },
                                 onVerticalDrag = { change, amount -> change.consume(); drag += amount },
                                 onDragEnd = { if (expanded && drag > threshold) back() else if (!expanded && drag < -threshold) { push(); route = "watch" } })
                         }, verticalAlignment = Alignment.CenterVertically) {
-                            IconButton({ if (expanded) back() else { push(); route = "watch" } }) {
+                            if (expanded) IconButton({ back() }) {
                                 Icon(if (expanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp, if (expanded) "Thu nhỏ video" else "Mở rộng video")
                             }
                             Text(video.title, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleSmall)
-                            if (remaining > 0) Text("${remaining / 60}:${(remaining % 60).toString().padStart(2, '0')}", style = MaterialTheme.typography.labelSmall)
-                            IconButton({ showTimer = true }) { Icon(Icons.Default.Settings, "Cài đặt video") }
+                            if (expanded && remaining > 0) Text("${remaining / 60}:${(remaining % 60).toString().padStart(2, '0')}", style = MaterialTheme.typography.labelSmall)
+                            IconButton({ vm.toggleLater(video) }) {
+                                Icon(if (library.watchLater.any { it.id == video.id }) Icons.Default.Bookmark else Icons.Default.BookmarkAdd,
+                                    if (library.watchLater.any { it.id == video.id }) "Bỏ khỏi xem sau" else "Thêm vào hàng đợi xem sau")
+                            }
+                            if (expanded) IconButton({ showTimer = true }) { Icon(Icons.Default.Settings, "Cài đặt video") }
                             IconButton({ activeVideo = null; WebPlaybackService.setSleepTimer(context, 0); if (expanded) back() }) { Icon(Icons.Default.Close, "Đóng video") }
                         }
                         key(video.id) {
                             val start = remember { library.history.firstOrNull { it.video.id == video.id }?.positionSeconds ?: 0 }
-                            YouTubePlayer(video.id, start, Modifier.fillMaxWidth().height(if (expanded) 236.dp else 200.dp),
+                            YouTubePlayer(video.id, start, Modifier.fillMaxWidth().height(if (expanded) 236.dp else 90.dp),
                                 onProgress = { vm.recordVideo(video, it) },
                                 onEnded = {
                                     vm.recordVideo(video, 0)
@@ -268,7 +281,19 @@ private fun VideoApp(incoming: String?, inPip: Boolean, consumed: () -> Unit, vm
                                     if (vm.settings.getBoolean("autoplay", false) && index >= 0) state.videos.getOrNull(index + 1)?.let(::openVideo)
                                 }, backgroundPlayback = true, title = video.title,
                                 onMinimize = if (expanded) ({ back() }) else null,
-                                onDrag = { playerDrag = it })
+                                onDrag = { playerDrag = it },
+                                onExpand = if (!expanded) ({ push(); route = "watch" }) else null)
+                        }
+                    }) { children, constraints ->
+                        val width = constraints.maxWidth
+                        val videoWidth = if (expanded) width else minOf(160.dp.roundToPx(), width / 2)
+                        val header = children[0].measure(androidx.compose.ui.unit.Constraints.fixed(
+                            if (expanded) width else width - videoWidth, (if (expanded) 48.dp else 90.dp).roundToPx()))
+                        val player = children[1].measure(androidx.compose.ui.unit.Constraints.fixed(
+                            videoWidth, (if (expanded) 236.dp else 90.dp).roundToPx()))
+                        layout(width, if (expanded) header.height + player.height else player.height) {
+                            header.placeRelative(if (expanded) 0 else videoWidth, 0)
+                            player.placeRelative(0, if (expanded) header.height else 0)
                         }
                     }
                 }
@@ -305,6 +330,7 @@ fun FeedList(state: SearchUiState, modifier: Modifier, more: () -> Unit, retry: 
             Text(state.heading, modifier = Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.labelLarge)
             state.explanation?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         }
+        if (state.loading && state.videos.isNotEmpty()) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
         items(state.videos, key = { it.playlistItemId.ifBlank { it.id } }) { video -> VideoCard(video, { open(video) }) { later(video) } }
         if (state.loading) item { Loading() }
         state.message?.let { message -> item { MessageCard(message, "Thử lại", retry) } }

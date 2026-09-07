@@ -63,6 +63,7 @@ fun rememberYouTubeAuthorization(vm: VideoViewModel): Authorize {
             }.addOnFailureListener { fail(it) }
         }
     }
-    LaunchedEffect(Unit) { if (vm.settings.getBoolean("reconnect", false)) authorize(false, false) {} }
+    val recovery = rememberRecoveryTrigger()
+    LaunchedEffect(recovery) { if (vm.settings.getBoolean("reconnect", false)) authorize(false, false) {} }
     return { write, action -> authorize(write, true, action) }
 }

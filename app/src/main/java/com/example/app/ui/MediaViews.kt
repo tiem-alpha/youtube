@@ -102,18 +102,24 @@ fun shareVideo(context: Context, id: String) {
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modifier, onProgress: (Int) -> Unit = {}, onEnded: () -> Unit = {}, backgroundPlayback: Boolean = false, title: String = "Video YouTube", onMinimize: (() -> Unit)? = null, onDrag: (Float) -> Unit = {}) {
+fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modifier, onProgress: (Int) -> Unit = {}, onEnded: () -> Unit = {}, backgroundPlayback: Boolean = false, title: String = "Video YouTube", onMinimize: (() -> Unit)? = null, onDrag: (Float) -> Unit = {}, onExpand: (() -> Unit)? = null) {
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
     val progress by rememberUpdatedState(onProgress)
     val ended by rememberUpdatedState(onEnded)
     val currentTitle by rememberUpdatedState(title)
-    val bridge = remember(videoId, backgroundPlayback) { WebPlaybackBridge(context, backgroundPlayback) }
+    var attempt by remember(videoId) { mutableIntStateOf(0) }
+    var resumeSeconds by remember(videoId) { mutableIntStateOf(startSeconds) }
+    var loading by remember(videoId) { mutableStateOf(true) }
+    var buffering by remember(videoId) { mutableStateOf(false) }
+    var retryable by remember(videoId) { mutableStateOf(true) }
+    val recovery = rememberRecoveryTrigger()
+    val bridge = remember(videoId, backgroundPlayback, attempt) { WebPlaybackBridge(context, backgroundPlayback) }
     var error by remember(videoId) { mutableStateOf<String?>(null) }
     var fullscreen by remember { mutableStateOf<Dialog?>(null) }
     var customCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
     fun exitFullscreen() { fullscreen?.dismiss(); fullscreen = null; customCallback?.onCustomViewHidden(); customCallback = null }
-    val webView = remember(videoId) {
+    val webView = remember(videoId, attempt) {
         BackgroundPlaybackWebView(context, backgroundPlayback).apply {
             // A wrap-content WebView can give percentage-height HTML a zero-height viewport.
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
@@ -123,12 +129,16 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
             settings.allowFileAccess = false; settings.allowContentAccess = false
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
             addJavascriptInterface(object {
-                @JavascriptInterface fun position(seconds: Int) { post { progress(seconds.coerceAtLeast(0)) } }
+                @JavascriptInterface fun position(seconds: Int) { post { resumeSeconds = seconds.coerceAtLeast(0); progress(resumeSeconds) } }
                 @JavascriptInterface fun finished() { post { ended() } }
                 @JavascriptInterface fun playback(state: Int, seconds: Int, duration: Int) { post {
+                    buffering = state == 3
+                    loading = error == null && (state == 3 || state == -1)
+                    if (state == 1) { error = null; retryable = false }
+                    if (state == 3) retryable = true
                     bridge.update(state, seconds, currentTitle, duration) { error = "Không khởi động được phát nền. Mở lại màn hình video rồi bấm Phát." }
                 } }
-                @JavascriptInterface fun failed(code: Int) { post { error = when (code) {
+                @JavascriptInterface fun failed(code: Int) { post { loading = false; retryable = code == 5; error = when (code) {
                     101, 150 -> "Chủ sở hữu không cho phép phát nhúng. Bạn có thể mở video trên YouTube."
                     100 -> "Video không tồn tại hoặc ở chế độ riêng tư."
                     else -> "YouTube không phát được video (mã $code). Thử lại hoặc mở trên YouTube."
@@ -141,7 +151,10 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
                     return true
                 }
                 override fun onReceivedError(view: WebView, request: WebResourceRequest, webError: WebResourceError) {
-                    if (request.isForMainFrame) error = "Không tải được trình phát. Kiểm tra mạng và thử lại."
+                    if (request.isForMainFrame) {
+                        loading = false; retryable = true
+                        error = "Không tải được trình phát. Kiểm tra mạng và thử lại."
+                    }
                 }
             }
             webChromeClient = object : WebChromeClient() {
@@ -163,12 +176,24 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
                     <style>html,body{margin:0;padding:0;width:100%;height:100vh;background:#000;overflow:hidden}#player{position:fixed;inset:0;display:block;width:100%;height:100%;border:0}</style></head>
                     <body><div id="player"></div><script src="https://www.youtube.com/iframe_api"></script><script>
                     var player; function reportPlayback(){if(player&&player.getPlayerState&&player.getCurrentTime)Companion.playback(player.getPlayerState(),Math.floor(player.getCurrentTime()),Math.floor(player.getDuration()||0));}
-                    function onYouTubeIframeAPIReady(){player=new YT.Player('player',{width:'100%',height:'100%',videoId:'$id',playerVars:{controls:1,fs:1,playsinline:1,autoplay:1,start:${startSeconds.coerceAtLeast(0)},origin:'$origin'},events:{
+                    function onYouTubeIframeAPIReady(){player=new YT.Player('player',{width:'100%',height:'100%',videoId:'$id',playerVars:{controls:1,fs:1,playsinline:1,autoplay:1,start:${resumeSeconds.coerceAtLeast(0)},origin:'$origin'},events:{
                     onStateChange:function(e){reportPlayback();if(e.data===0)Companion.finished();},onError:function(e){Companion.playback(2,0,0);Companion.failed(e.data);}}});}
                     setInterval(function(){reportPlayback();if(player&&player.getPlayerState&&player.getPlayerState()===1)Companion.position(Math.floor(player.getCurrentTime()));},5000);
                     </script></body></html>
                 """.trimIndent(), "text/html", "UTF-8", null)
             }
+        }
+    }
+    LaunchedEffect(recovery) {
+        if (recovery > 0 && retryable && (error != null || buffering)) {
+            error = null; loading = true; buffering = false; attempt++
+        }
+    }
+    LaunchedEffect(videoId, attempt, loading) {
+        if (loading) {
+            kotlinx.coroutines.delay(30_000)
+            loading = false; retryable = true
+            error = "Tải video quá lâu. Kiểm tra mạng rồi thử lại."
         }
     }
     BackHandler(fullscreen != null) { exitFullscreen() }
@@ -182,10 +207,15 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
         onDispose { owner.lifecycle.removeObserver(observer); bridge.close(); exitFullscreen(); webView.stopLoading(); webView.removeJavascriptInterface("Companion"); webView.destroy() }
     }
     Column(modifier) {
-        AndroidView(factory = { HoldToMinimizeLayout(it).apply { addView(webView) } },
-            update = { it.dragEnabled = onMinimize != null && fullscreen == null; it.onMinimize = { onMinimize?.invoke() }; it.onDrag = onDrag },
-            modifier = Modifier.fillMaxWidth().weight(1f).heightIn(min = 200.dp))
-        error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(8.dp)) }
+        key(webView) { AndroidView(factory = { HoldToMinimizeLayout(it).apply { addView(webView) } },
+            update = { it.dragEnabled = onMinimize != null && fullscreen == null; it.onMinimize = { onMinimize?.invoke() }; it.onDrag = onDrag; it.onExpand = onExpand },
+            modifier = Modifier.fillMaxWidth().weight(1f)) }
+        if (loading) androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
+        error?.let { message ->
+            androidx.compose.material3.TextButton({ error = null; loading = true; retryable = true; attempt++ }) {
+                Text("$message · Thử lại", color = MaterialTheme.colorScheme.error)
+            }
+        }
     }
 }
 
