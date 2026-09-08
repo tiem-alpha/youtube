@@ -1,6 +1,6 @@
 ﻿# Trạng thái kiểm chứng — 2026-09-05
 
-Bản: **1.1.0**, versionCode **2**, package **com.example.app**.
+Bản: **1.1.0**, versionCode **3**, package **com.example.app**. GitHub Release: **v1.1**.
 
 ## Sửa queue Xem sau không chuyển bài — 2026-09-08
 
