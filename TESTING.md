@@ -2,6 +2,21 @@
 
 Bản: **1.1.0**, versionCode **2**, package **com.example.app**.
 
+## Sửa queue Xem sau không chuyển bài — 2026-09-08
+
+- Nguyên nhân: nút thêm queue ghi vào `watchLater`, nhưng callback kết thúc chỉ đọc bản sao feed và yêu cầu bật Autoplay.
+- Khi kết thúc, loại video vừa xem khỏi Xem sau và phát mục thêm sớm nhất còn lại, kể cả khi Autoplay tắt. Queue hết thì áp dụng Autoplay của feed như trước. Chế độ lặp vẫn ưu tiên lặp video hiện tại. Mục video tiếp theo ưu tiên queue.
+- `testDebugUnitTest`, `assembleDebug`, `assembleDebugAndroidTest`, `lintDebug` qua. Hai unit test mới kiểm tra thứ tự queue, bỏ video hiện tại và queue hết. `LibraryPersistenceTest`: 2/2 qua trên thiết bị c5aa7fc6, gồm kiểm tra lưu trạng thái queue sau khi phát xong.
+- Đã cài cập nhật APK debug thành công trên thiết bị. Chưa xác nhận chuyển bài với video YouTube thật hoặc khi khóa màn hình trong lần sửa này.
+
+## Background autoplay and notification resume - 2026-09-08
+
+- Keep one WebView/media-session owner across queued videos. End callbacks load the next ID directly without waiting for Compose to resume. Keep the playback queue separate from the currently browsed feed.
+- Resume commands wake the WebView and acquire CPU/network locks before waiting for player state. A native service timer requests state every 15 seconds; a throttled JavaScript interval no longer stops active playback after 60 seconds.
+- Added BackgroundQueueTest with a deterministic HTML player fixture for two background transitions and notification resume. Updated WebPlaybackServiceTest to send Play from a notification with the Activity stopped.
+- Device instrumentation did not complete: the first run stalled and was explicitly stopped; the retry was canceled after the user reported interruption. These tests are not recorded as passing. Real YouTube playback across Home, lock screen, fullscreen, and notification resume still needs device verification.
+- Final APK is app/build/outputs/apk/debug/app-debug.apk. The final changes were not installed on the phone after stopping device tests.
+
 ## Sửa tạm dừng khi chuyển toàn màn hình / khóa máy — 2026-09-07
 
 - Chặn window visibility ở bước dispatch của BackgroundPlaybackWebView để các view con cũng được giữ trạng thái. Bọc custom view toàn màn hình của Chromium bằng BackgroundPlaybackLayout với cùng quy tắc; trước đây custom view nằm trực tiếp trong Dialog nên bỏ qua xử lý phát nền của WebView.

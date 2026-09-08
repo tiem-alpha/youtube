@@ -25,6 +25,12 @@ class LocalLibrary(context: Context, preferencesName: String = "library") {
         val old = _state.value.watchLater
         save(_state.value.copy(watchLater = if (old.any { it.id == video.id }) old.filterNot { it.id == video.id } else listOf(video) + old))
     }
+    fun finishQueuedVideo(videoId: String?): VideoResult? {
+        val remaining = remainingWatchQueue(_state.value.watchLater, videoId)
+        if (remaining != _state.value.watchLater) save(_state.value.copy(watchLater = remaining))
+        // Watch Later is stored newest first; play in insertion order.
+        return remaining.lastOrNull()
+    }
     fun createPlaylist(title: String) { if (title.isNotBlank()) save(_state.value.copy(playlists = _state.value.playlists + LocalPlaylist(UUID.randomUUID().toString(), title.trim()))) }
     fun add(playlistId: String, video: VideoResult) { save(_state.value.copy(playlists = _state.value.playlists.map { if (it.id == playlistId) it.copy(videos = (it.videos + video).distinctBy(VideoResult::id)) else it })) }
     fun remove(playlistId: String, videoId: String) { save(_state.value.copy(playlists = _state.value.playlists.map { if (it.id == playlistId) it.copy(videos = it.videos.filterNot { v -> v.id == videoId }) else it })) }
@@ -40,6 +46,8 @@ class LocalLibrary(context: Context, preferencesName: String = "library") {
     fun hide(videoId: String) { save(_state.value.copy(hiddenIds = _state.value.hiddenIds + videoId)) }
 
     companion object {
+        fun remainingWatchQueue(videos: List<VideoResult>, finishedId: String?): List<VideoResult> =
+            videos.filterNot { it.id == finishedId }
         fun canImportLegacySearches(owner: String?, previousOwners: Set<String>): Boolean =
             previousOwners == (owner?.let { setOf(it) } ?: emptySet<String>())
         fun mergeSearches(current: List<String>, legacy: List<String>): List<String> =

@@ -10,6 +10,23 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class LibraryPersistenceTest {
+    @Test fun queuedVideosAddedDuringPlaybackAdvanceAndPersistCompletion() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val name = "queue_test_" + System.nanoTime()
+        try {
+            val library = LocalLibrary(context, name)
+            val first = VideoResult("bbbbbbbbbbb", "B", "", null)
+            val second = VideoResult("ccccccccccc", "C", "", null)
+            library.toggleLater(first)
+            library.toggleLater(second)
+            assertEquals(first, library.finishQueuedVideo("aaaaaaaaaaa"))
+            assertEquals(second, library.finishQueuedVideo(first.id))
+            val restored = LocalLibrary(context, name)
+            assertEquals(listOf(second), restored.state.value.watchLater)
+            assertNull(restored.finishQueuedVideo(second.id))
+            assertTrue(LocalLibrary(context, name).state.value.watchLater.isEmpty())
+        } finally { context.getSharedPreferences(name, 0).edit().clear().commit() }
+    }
     @Test fun historyWatchLaterAndPlaylistsSurviveReopening() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val name = "library_test_" + System.nanoTime()

@@ -82,6 +82,7 @@ private fun VideoApp(incoming: String?, inPip: Boolean, consumed: () -> Unit, vm
                 vm.library.state.value.history.firstOrNull { it.video.id == id }?.video ?: VideoResult(id, "Video YouTube", "YouTube", null)
             } }
         )) { mutableStateOf<VideoResult?>(null) }
+        var playbackQueue by remember { mutableStateOf<List<VideoResult>>(emptyList()) }
         var showSearch by rememberSaveable { mutableStateOf(false) }
         var showTimer by remember { mutableStateOf(false) }
         val playbackRate by remember { mutableFloatStateOf(vm.settings.getFloat("playbackRate", 1f)) }
@@ -110,6 +111,9 @@ private fun VideoApp(incoming: String?, inPip: Boolean, consumed: () -> Unit, vm
             backStack = ArrayList((backStack + snapshot).takeLast(20))
         }
         fun openVideo(video: VideoResult) {
+            val feed = vm.state.value.videos
+            if (feed.any { it.id == video.id }) playbackQueue = feed.toList()
+            else if (playbackQueue.none { it.id == video.id }) playbackQueue = listOf(video)
             if (route != "watch") push()
             vm.recordVideo(video); vm.playback.pause(); activeVideo = video; selectedId = video.id; route = "watch"
         }
@@ -239,8 +243,9 @@ private fun VideoApp(incoming: String?, inPip: Boolean, consumed: () -> Unit, vm
                 "channel" -> ChannelScreen(vm, auth, channelId, modifier, ::openVideo)
                 "watch" -> {
                     val video = library.history.firstOrNull { it.video.id == selectedId }?.video ?: VideoResult(selectedId, "Video YouTube", "YouTube", null)
-                    val index = state.videos.indexOfFirst { it.id == selectedId }
-                    key(selectedId) { WatchScreen(vm, auth, video, modifier, ::openChannel, if (index >= 0) state.videos.getOrNull(index + 1) else null, ::openVideo) }
+                    val index = playbackQueue.indexOfFirst { it.id == selectedId }
+                    val nextQueued = library.watchLater.lastOrNull { it.id != selectedId }
+                    key(selectedId) { WatchScreen(vm, auth, video, modifier, ::openChannel, nextQueued ?: if (index >= 0) playbackQueue.getOrNull(index + 1) else null, ::openVideo) }
                 }
                 "local" -> { LaunchedEffect(Unit) { activeVideo = null }; LocalScreen(vm, modifier) }
                 "settings" -> SettingsScreen(vm, dark, { dark = it; vm.settings.edit().putBoolean("dark", it).apply() }, modifier) { showAccount = true }
@@ -274,14 +279,24 @@ private fun VideoApp(incoming: String?, inPip: Boolean, consumed: () -> Unit, vm
                             if (expanded) IconButton({ showTimer = true }) { Icon(Icons.Default.Settings, "Cài đặt video") }
                             IconButton({ activeVideo = null; WebPlaybackService.setSleepTimer(context, 0); if (expanded) back() }) { Icon(Icons.Default.Close, "Đóng video") }
                         }
-                        key(video.id) {
-                            val start = remember { library.history.firstOrNull { it.video.id == video.id }?.positionSeconds ?: 0 }
+                        run {
+                            val start = remember(video.id) { library.history.firstOrNull { it.video.id == video.id }?.positionSeconds ?: 0 }
                             YouTubePlayer(video.id, start, Modifier.fillMaxWidth().height(if (expanded) 236.dp else 90.dp),
-                                onProgress = { vm.recordVideo(video, it) },
+                                onProgress = { seconds -> activeVideo?.let { vm.recordVideo(it, seconds) } },
                                 onEnded = {
-                                    vm.recordVideo(video, 0)
-                                    val index = state.videos.indexOfFirst { it.id == video.id }
-                                    if (vm.settings.getBoolean("autoplay", false) && index >= 0) state.videos.getOrNull(index + 1)?.let(::openVideo)
+                                    activeVideo?.let { vm.recordVideo(it, 0) }
+                                }, nextVideo = {
+                                    val videos = playbackQueue
+                                    val index = videos.indexOfFirst { it.id == activeVideo?.id }
+                                    val queued = vm.library.finishQueuedVideo(activeVideo?.id)
+                                    val target = queued ?: if (vm.settings.getBoolean("autoplay", false) && index >= 0) {
+                                        videos.getOrNull(index + 1)
+                                    } else null
+                                    target?.let {
+                                        activeVideo = it; selectedId = it.id
+                                        vm.recordVideo(it, 0)
+                                        it.id to it.title
+                                    }
                                 }, backgroundPlayback = true, title = video.title, playbackRate = playbackRate, loop = loopVideo,
                                 onMinimize = if (expanded) ({ back() }) else null,
                                 onDrag = { playerDrag = it },

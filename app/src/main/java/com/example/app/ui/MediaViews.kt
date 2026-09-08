@@ -103,25 +103,27 @@ fun shareVideo(context: Context, id: String) {
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modifier, onProgress: (Int) -> Unit = {}, onEnded: () -> Unit = {}, backgroundPlayback: Boolean = false, title: String = "Video YouTube", onMinimize: (() -> Unit)? = null, onDrag: (Float) -> Unit = {}, onExpand: (() -> Unit)? = null, playbackRate: Float = 1f, loop: Boolean = false) {
+fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modifier, onProgress: (Int) -> Unit = {}, onEnded: () -> Unit = {}, backgroundPlayback: Boolean = false, title: String = "Video YouTube", onMinimize: (() -> Unit)? = null, onDrag: (Float) -> Unit = {}, onExpand: (() -> Unit)? = null, playbackRate: Float = 1f, loop: Boolean = false, nextVideo: () -> Pair<String, String>? = { null }) {
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
     val progress by rememberUpdatedState(onProgress)
     val ended by rememberUpdatedState(onEnded)
-    val currentTitle by rememberUpdatedState(title)
+    val next by rememberUpdatedState(nextVideo)
+    var loadedId by remember { mutableStateOf(videoId) }
+    var loadedTitle by remember { mutableStateOf(title) }
     val currentLoop by rememberUpdatedState(loop)
-    var lastHeartbeat by remember(videoId) { mutableLongStateOf(android.os.SystemClock.elapsedRealtime()) }
-    var expectsPlayback by remember(videoId) { mutableStateOf(true) }
-    var playerState by remember(videoId) { mutableIntStateOf(-1) }
-    var automaticRetries by remember(videoId) { mutableIntStateOf(0) }
-    var attempt by remember(videoId) { mutableIntStateOf(0) }
-    var resumeSeconds by remember(videoId) { mutableIntStateOf(startSeconds) }
-    var loading by remember(videoId) { mutableStateOf(true) }
-    var buffering by remember(videoId) { mutableStateOf(false) }
-    var retryable by remember(videoId) { mutableStateOf(true) }
+    var lastHeartbeat by remember { mutableLongStateOf(android.os.SystemClock.elapsedRealtime()) }
+    var expectsPlayback by remember { mutableStateOf(true) }
+    var playerState by remember { mutableIntStateOf(-1) }
+    var automaticRetries by remember { mutableIntStateOf(0) }
+    var attempt by remember { mutableIntStateOf(0) }
+    var resumeSeconds by remember { mutableIntStateOf(startSeconds) }
+    var loading by remember { mutableStateOf(true) }
+    var buffering by remember { mutableStateOf(false) }
+    var retryable by remember { mutableStateOf(true) }
     val recovery = rememberRecoveryTrigger()
-    val bridge = remember(videoId, backgroundPlayback, attempt) { WebPlaybackBridge(context, backgroundPlayback) }
-    var error by remember(videoId) { mutableStateOf<String?>(null) }
+    val bridge = remember(backgroundPlayback, attempt) { WebPlaybackBridge(context, backgroundPlayback) }
+    var error by remember { mutableStateOf<String?>(null) }
     var fullscreen by remember { mutableStateOf<Dialog?>(null) }
     var customCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
     var restoreFullscreenPlayback by remember { mutableStateOf<(() -> Unit)?>(null) }
@@ -132,8 +134,8 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
         restoreFullscreenPlayback = null
         restore?.invoke()
     }
-    val gestureGuard = remember(videoId, attempt, backgroundPlayback) { PlayerGestureGuard() }
-    val webView = remember(videoId, attempt, backgroundPlayback) {
+    val gestureGuard = remember(attempt, backgroundPlayback) { PlayerGestureGuard() }
+    val webView = remember(attempt, backgroundPlayback) {
         BackgroundPlaybackWebView(context, backgroundPlayback).apply {
             // A wrap-content WebView can give percentage-height HTML a zero-height viewport.
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
@@ -146,7 +148,19 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
             addJavascriptInterface(object {
                 @JavascriptInterface fun position(seconds: Int) { post { if (!disposed) { resumeSeconds = seconds.coerceAtLeast(0); progress(resumeSeconds) } } }
                 @JavascriptInterface fun finished() { post { if (!disposed) {
-                    if (currentLoop) evaluateJavascript("player.seekTo(0,true);player.playVideo();", null) else ended()
+                    if (currentLoop) evaluateJavascript("player.seekTo(0,true);player.playVideo();", null) else {
+                        ended()
+                        next()?.let { target ->
+                            YouTubeLinks.videoId(target.first)?.let { id ->
+                                loadedId = id; loadedTitle = target.second
+                                resumeSeconds = 0; automaticRetries = 0; error = null; retryable = true; expectsPlayback = true
+                                loading = true; buffering = true
+                                bridge.update(3, 0, loadedTitle) {}
+                                onResume()
+                                evaluateJavascript("loadRequestedVideo('$id',0);", null)
+                            }
+                        }
+                    }
                 } } }
                 @JavascriptInterface fun playback(state: Int, seconds: Int, duration: Int) { post {
                     if (disposed) return@post
@@ -157,7 +171,7 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
                     if (state == 1) { error = null; retryable = false }
                     loading = error == null && (state == 3 || state == -1)
                     if (state == 3) retryable = true
-                    bridge.update(state, seconds, currentTitle, duration) { error = "Không khởi động được phát nền. Mở lại màn hình video rồi bấm Phát." }
+                    bridge.update(state, seconds, loadedTitle, duration) { error = "Không khởi động được phát nền. Mở lại màn hình video rồi bấm Phát." }
                 } }
                 @JavascriptInterface fun failed(code: Int) { post { if (disposed) return@post; expectsPlayback = false; loading = false; retryable = code == 5; error = when (code) {
                     101, 150 -> "Chủ sở hữu không cho phép phát nhúng. Bạn có thể mở video trên YouTube."
@@ -211,14 +225,26 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
                     <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="strict-origin-when-cross-origin">
                     <style>html,body{margin:0;padding:0;width:100%;height:100vh;background:#000;overflow:hidden}#player{position:fixed;inset:0;display:block;width:100%;height:100%;border:0}</style></head>
                     <body><div id="player"></div><script src="https://www.youtube.com/iframe_api"></script><script>
+                    var requestedVideo='$id', requestedStart=${resumeSeconds.coerceAtLeast(0)}, playerReady=false;
+                    function loadRequestedVideo(id,start){requestedVideo=id;requestedStart=start;if(playerReady)player.loadVideoById(id,start);}
                     var player; function reportPlayback(){if(player&&player.getPlayerState&&player.getCurrentTime)Companion.playback(player.getPlayerState(),Math.floor(player.getCurrentTime()),Math.floor(player.getDuration()||0));}
-                    function onYouTubeIframeAPIReady(){player=new YT.Player('player',{width:'100%',height:'100%',videoId:'$id',playerVars:{controls:1,fs:1,playsinline:1,autoplay:1,start:${resumeSeconds.coerceAtLeast(0)},origin:'$origin'},events:{
-                    onReady:function(e){e.target.setPlaybackRate($playbackRate);e.target.playVideo();},onStateChange:function(e){reportPlayback();if(e.data===0)Companion.finished();},onError:function(e){Companion.playback(2,0,0);Companion.failed(e.data);}}});}
+                    function onYouTubeIframeAPIReady(){player=new YT.Player('player',{width:'100%',height:'100%',videoId:requestedVideo,playerVars:{controls:1,fs:1,playsinline:1,autoplay:1,start:${resumeSeconds.coerceAtLeast(0)},origin:'$origin'},events:{
+                    onReady:function(e){playerReady=true;e.target.loadVideoById(requestedVideo,requestedStart);e.target.setPlaybackRate($playbackRate);e.target.playVideo();},onStateChange:function(e){reportPlayback();if(e.data===0)Companion.finished();},onError:function(e){Companion.playback(2,0,0);Companion.failed(e.data);}}});}
                     setInterval(function(){reportPlayback();if(player&&player.getPlayerState&&player.getPlayerState()===1)Companion.position(Math.floor(player.getCurrentTime()));},5000);
                     </script></body></html>
                 """.trimIndent(), "text/html", "UTF-8", null)
             }
         }
+    }
+    LaunchedEffect(webView, videoId, title) {
+        if (loadedId != videoId) {
+            YouTubeLinks.videoId(videoId)?.let { id ->
+                loadedId = id; loadedTitle = title
+                resumeSeconds = startSeconds; automaticRetries = 0; error = null; retryable = true; expectsPlayback = true; loading = true
+                webView.onResume()
+                webView.evaluateJavascript("loadRequestedVideo('$id',${startSeconds.coerceAtLeast(0)});", null)
+            }
+        } else loadedTitle = title
     }
     LaunchedEffect(recovery) {
         if (recovery > 0 && retryable && (error != null || buffering)) {
@@ -249,7 +275,7 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
     DisposableEffect(webView, owner) {
         bridge.attach(webView)
         lastHeartbeat = android.os.SystemClock.elapsedRealtime()
-        bridge.update(3, resumeSeconds, currentTitle) { error = "Không khởi động được phát nền. Bấm Thử lại khi mở ứng dụng." }
+        bridge.update(3, resumeSeconds, loadedTitle) { error = "Không khởi động được phát nền. Bấm Thử lại khi mở ứng dụng." }
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_PAUSE && !backgroundPlayback) { webView.evaluateJavascript("if(player&&player.pauseVideo)player.pauseVideo();", null); webView.onPause() }
             if (event == Lifecycle.Event.ON_RESUME) {

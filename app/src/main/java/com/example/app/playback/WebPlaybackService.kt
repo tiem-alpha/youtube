@@ -37,6 +37,17 @@ class WebPlaybackService : Service() {
         if (deadline > 0) handler.postDelayed(sleepStop, (deadline - SystemClock.elapsedRealtime()).coerceAtLeast(0))
     }
     private val idleStop = Runnable { stopSelf() }
+    private val heartbeat = object : Runnable {
+        override fun run() {
+            if (playing || buffering) {
+                // JS intervals can be throttled while the screen is off. The native
+                // service keeps the session alive and explicitly requests player state.
+                publish()
+                command("refresh")
+            }
+            handler.postDelayed(this, 15_000)
+        }
+    }
     private val noisy = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) { command("pause") }
     }
@@ -44,6 +55,7 @@ class WebPlaybackService : Service() {
     override fun onCreate() {
         super.onCreate()
         running = true
+        handler.postDelayed(heartbeat, 15_000)
         wakeLock = getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:youtube")
         @Suppress("DEPRECATION")
         wifiLock = applicationContext.getSystemService(WifiManager::class.java).createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "$packageName:youtube")
@@ -93,6 +105,12 @@ class WebPlaybackService : Service() {
     }
 
     private fun command(value: String, position: Long = 0) {
+        if (value == "play") {
+            // Hold CPU/network while Chromium resumes, before its next heartbeat.
+            ended = false
+            buffering = true
+            publish()
+        }
         sendBroadcast(Intent(COMMAND).setPackage(packageName).putExtra("owner", owner)
             .putExtra("command", value).putExtra("position", position))
     }
@@ -122,11 +140,10 @@ class WebPlaybackService : Service() {
         startForeground(NOTIFICATION, notification)
         if (playing || buffering) {
             handler.removeCallbacks(idleStop)
-            // Refreshed by player heartbeats; bounded even if the renderer disappears.
+            // Renewed on the native timer as well as player state updates.
             if (wakeLock.isHeld) wakeLock.release()
             wakeLock.acquire(60_000)
             if (!wifiLock.isHeld) wifiLock.acquire()
-            handler.postDelayed(idleStop, 60_000)
         } else {
             releaseLocks()
             handler.removeCallbacks(idleStop)

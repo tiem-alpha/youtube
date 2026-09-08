@@ -55,11 +55,14 @@ class WebPlaybackServiceTest {
                 waitUntil { controller.playbackState?.state == PlaybackState.STATE_PAUSED }
                 assertEquals(24_000L, controller.playbackState!!.position)
                 assertEquals(120_000L, controller.metadata!!.getLong(android.media.MediaMetadata.METADATA_KEY_DURATION))
-                scenario.onActivity {
-                    context.startService(Intent(context, WebPlaybackService::class.java).setAction(WebPlaybackService.UPDATE)
-                        .putExtra("owner", "first").putExtra("buffering", true))
-                }
+                // Resume from the notification while the Activity is stopped.
+                scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+                notifications.activeNotifications.first { it.id == 2002 }.notification.actions[0].actionIntent.send()
+                val play = commands.poll(5, TimeUnit.SECONDS)!!
+                assertEquals("first", play.getStringExtra("owner"))
+                assertEquals("play", play.getStringExtra("command"))
                 waitUntil { controller.playbackState?.state == PlaybackState.STATE_BUFFERING }
+                scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
                 scenario.onActivity {
                     // Disposal can arrive before the replacement player starts loading.
                     context.startService(Intent(context, WebPlaybackService::class.java).setAction(WebPlaybackService.STOP).putExtra("owner", "first"))

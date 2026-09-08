@@ -39,11 +39,17 @@ class WebPlaybackBridge(private val context: Context, private val enabled: Boole
             override fun onReceive(context: Context, intent: Intent) {
                 if (closed || intent.getStringExtra("owner") != owner) return
                 val script = when (intent.getStringExtra("command")) {
+                    "refresh" -> "if(typeof reportPlayback==='function')reportPlayback();"
                     "play" -> "if(player&&player.playVideo)player.playVideo();"
                     "seek" -> "if(player&&player.seekTo)player.seekTo(${intent.getLongExtra("position", 0).coerceAtLeast(0) / 1000.0},true);"
                     else -> "if(player&&player.pauseVideo)player.pauseVideo();"
                 }
                 if (intent.getStringExtra("command") == "serviceStopped") { started = false; previousSnapshot = "" }
+                if (intent.getStringExtra("command") == "play") {
+                    previousSnapshot = ""
+                    webView.onResume()
+                    webView.dispatchWindowVisibilityChanged(View.VISIBLE)
+                }
                 webView.evaluateJavascript(script, null)
             }
         }.also { ContextCompat.registerReceiver(context, it, IntentFilter(WebPlaybackService.COMMAND), ContextCompat.RECEIVER_NOT_EXPORTED) }
