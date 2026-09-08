@@ -9,6 +9,40 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class HoldToMinimizeTest {
+    @Test fun popupOwnsSwipeEvenWhenItClosesBeforeFingerLifts() = scenario { layout, actions, send ->
+        var minimized = false
+        var offset = 0f
+        var popup = true
+        layout.dragBlocked = { popup }
+        layout.onMinimize = { minimized = true }; layout.onDrag = { offset = it }
+        send(MotionEvent.ACTION_DOWN, 0, 50f, 50f)
+        popup = false
+        send(MotionEvent.ACTION_MOVE, 20, 50f, 500f)
+        send(MotionEvent.ACTION_UP, 40, 50f, 500f)
+        assertFalse(minimized); assertEquals(0f, offset, 0f)
+        assertEquals(listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE, MotionEvent.ACTION_UP), actions)
+        send(MotionEvent.ACTION_DOWN, 0, 50f, 50f)
+        send(MotionEvent.ACTION_MOVE, 20, 50f, 500f)
+        send(MotionEvent.ACTION_UP, 40, 50f, 500f)
+        assertTrue(minimized)
+    }
+
+    @Test fun childScrollOwnershipIsRespectedUntilNextTouch() = scenario { layout, actions, send ->
+        var minimized = false
+        layout.onMinimize = { minimized = true }
+        send(MotionEvent.ACTION_DOWN, 0, 50f, 50f)
+        layout.requestDisallowInterceptTouchEvent(true)
+        send(MotionEvent.ACTION_MOVE, 20, 50f, 300f)
+        layout.requestDisallowInterceptTouchEvent(false)
+        send(MotionEvent.ACTION_MOVE, 40, 50f, 500f)
+        send(MotionEvent.ACTION_UP, 60, 50f, 500f)
+        assertFalse(minimized); assertFalse(actions.contains(MotionEvent.ACTION_CANCEL))
+        send(MotionEvent.ACTION_DOWN, 0, 50f, 50f)
+        send(MotionEvent.ACTION_MOVE, 20, 50f, 500f)
+        send(MotionEvent.ACTION_UP, 40, 50f, 500f)
+        assertTrue(minimized)
+    }
+
     @Test fun miniPlayerTapAndUpwardSwipeExpandWithoutSendingTouchesToVideo() = scenario { layout, actions, send ->
         var expanded = 0
         layout.onExpand = { expanded++ }

@@ -89,11 +89,11 @@ Không cần điền redirect URI/JavaScript origin cho client loại Android. T
 5. Mở **Đăng ký** hoặc **Thư viện → YouTube** để kiểm tra dữ liệu.
 6. Thích/bỏ thích, đăng bình luận và thay đổi playlist là thao tác thật trên tài khoản; chỉ thử khi bạn muốn thực hiện chúng.
 
-Nếu muốn dùng email khác, đăng xuất rồi kết nối lại. Có nút **Thu hồi quyền truy cập Google** và liên kết quản lý quyền trong hộp thoại tài khoản.
+Nếu muốn dùng email khác, chọn **Đăng nhập tài khoản khác** trong hộp thoại tài khoản. Có nút **Thu hồi quyền truy cập Google** và liên kết quản lý quyền trong hộp thoại tài khoản.
 
-## 5. API key dùng chung để duyệt video không cần đăng nhập
+## 5. API key tùy chọn cho dữ liệu bổ sung
 
-Để đáp ứng chế độ khách đầy đủ (trang chủ, tìm kiếm, thông tin video và đọc bình luận), chủ ứng dụng cần cấu hình API key dùng chung trước khi phân phối APK. Người dùng không cần tạo key hay đăng nhập để xem nội dung công khai. Mở liên kết trong trình phát nhúng vẫn hoạt động độc lập với Data API.
+Từ bản tích hợp NewPipe, trang chủ, tìm kiếm, Shorts và duyệt kênh không cần API key hoặc đăng nhập Google. API key dùng chung chỉ cần cho các dữ liệu còn đọc qua Data API khi chưa đăng nhập, như bình luận và metadata bổ sung. Không cấu hình key vẫn có thể duyệt và phát video công khai. Các tính năng tài khoản tiếp tục cần OAuth.
 
 Phần này cũng dành cho chủ ứng dụng. Ô nhập API key trong bản hiện tại phục vụ cấu hình/kiểm thử; không có nghĩa mỗi người sử dụng phải tạo key. Chủ ứng dụng có thể cấu hình key trong bản build dùng chung. Đăng nhập Google dùng OAuth, không dùng API key để xác thực tài khoản.
 
@@ -114,6 +114,21 @@ Khi có key, các yêu cầu công khai dùng key dù người dùng đã đăng
 Sau khi kết nối, ứng dụng gọi `channels.list(part=snippet, mine=true)` để hiển thị tên/ảnh kênh YouTube thay cho hồ sơ Google khi API trả về kênh. Nếu email quản lý nhiều kênh, bản hiện tại dùng kênh được phiên OAuth trả về, chưa có bộ chuyển kênh. [Hướng dẫn kênh mặc định của Google](https://support.google.com/youtube/answer/6019090?hl=en)
 
 ## 6. Cho người dùng bên ngoài đăng nhập
+
+Đã xác nhận trên điện thoại ngày 2026-09-08: màn hình Google trả `403: access_denied`, nêu rõ Video Companion đang kiểm thử và chỉ cho người kiểm thử được phê duyệt truy cập. Đây là giới hạn Audience của dự án OAuth; thay APK hoặc API key không gỡ được giới hạn này.
+
+Để mở cho người dùng bên ngoài mà không thêm từng email:
+
+1. Mở [Google Auth Platform → Audience](https://console.cloud.google.com/auth/audience), chọn đúng dự án chứa OAuth client Android của Video Companion.
+2. Đặt loại người dùng là **External**. Trong **Publishing status**, chọn **Publish app** để chuyển sang **In production**.
+3. Hoàn thiện **Branding**: tên ứng dụng, email hỗ trợ, trang chủ công khai và chính sách quyền riêng tư mô tả đúng cách app dùng dữ liệu. Xác minh quyền sở hữu tên miền dùng cho hồ sơ.
+4. Trong **Data Access**, khai báo các scope thực tế: `userinfo.email`, `userinfo.profile`, `youtube.readonly`, `youtube.force-ssl` (URL đầy đủ ở mục 2).
+5. Vào **Verification Center**, gửi hồ sơ xác minh theo yêu cầu của Google, gồm giải thích tính năng cần từng quyền và video minh họa luồng xin quyền/sử dụng dữ liệu. Chỉ xin các quyền app thực sự dùng.
+6. Khi các quyền cần thiết đã được duyệt, thử lại bằng tài khoản ngoài Test users: đăng nhập, đọc thư viện, rồi kiểm tra luồng xin thêm quyền khi người dùng chọn một thao tác ghi.
+
+**Publish app chưa phải hoàn tất xác minh.** Ứng dụng xin quyền nhạy cảm chưa được duyệt có thể hiện cảnh báo chưa xác minh và bị giới hạn tổng 100 người dùng mới. Tài khoản Workspace vẫn có thể chịu hạn chế của quản trị viên. [Audience và giới hạn người dùng](https://support.google.com/cloud/answer/15549945?hl=en), [Hồ sơ xác minh quyền nhạy cảm](https://developers.google.com/identity/protocols/oauth2/production-readiness/sensitive-scope-verification).
+
+Trạng thái: đã xác nhận nguyên nhân trên thiết bị; chưa thay đổi cấu hình trong Google Cloud và chưa gửi hồ sơ xác minh.
 
 | Cấu hình | Ai đăng nhập được? |
 |---|---|

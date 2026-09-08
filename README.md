@@ -27,6 +27,15 @@ Bản sửa đã build và chạy unit test/lint; thao tác WebView, kéo thu nh
 - Media trực tiếp dùng [Media3 LoadControl](https://developer.android.com/reference/androidx/media3/exoplayer/DefaultLoadControl.Builder): mục tiêu buffer 30–90 giây, bắt đầu sau 1,5 giây, phục hồi sau khi cạn đệm với 5 giây dữ liệu, giữ 15 giây đã phát để tua lại. Ngưỡng dung lượng 64 MB được ưu tiên nên video bitrate cao có thể không đạt đủ 90 giây; đây không phải giới hạn tổng RAM ứng dụng.
 - Các thông số Media3 không áp dụng cho video nhúng YouTube. Buffer và chất lượng thích ứng của YouTube do trình phát YouTube quản lý. Giữ nguyên player khi thu nhỏ giúp tránh tải lại video, nhưng không bảo đảm loại bỏ giật do mạng hoặc thiết bị.
 
+## Cập nhật 2026-09-07
+
+- Cuộn popup trong khung video (cài đặt, tốc độ, chất lượng) được ưu tiên hơn kéo thu nhỏ, kể cả khi cuộn tới đầu/cuối menu. Đóng popup rồi vuốt mới sẽ thu nhỏ lại. Với WebView quá cũ không hỗ trợ nhận diện popup, vẫn thu nhỏ bằng thanh tiêu đề hoặc nút mũi tên.
+
+- Phát YouTube: khởi động dịch vụ nền ngay khi tải, giữ dịch vụ trong lúc đổi trình phát, bỏ phản hồi từ WebView đã đóng. Nếu tải hoặc mất heartbeat quá 20 giây, thử tạo lại tối đa hai lần tại vị trí đã lưu; vẫn có nút thử lại khi không phục hồi được.
+- Cài đặt video của app còn Tốc độ, Loop, Transcript và Chất lượng. Loop ưu tiên hơn tự phát video tiếp theo. Transcript mở YouTube để xem bản chép lời nếu có; Chất lượng hướng dẫn chọn trong bánh răng của trình phát nhúng, vì IFrame API không hỗ trợ đặt độ phân giải. Menu riêng của YouTube bên trong video do YouTube quản lý.
+- Nút Ẩn video nằm cạnh Xem sau, lưu trên thiết bị qua lần khởi động sau và loại video khỏi Home, Shorts và video cùng chủ đề. Xóa toàn bộ dữ liệu cục bộ cũng xóa danh sách ẩn.
+- Làm mới Home dùng tiếp con trỏ nguồn, loại các video đã có trong đợt gợi ý; bỏ qua tối đa ba trang trống sau lọc. Khi hết nguồn có thể không còn video mới; khi lỗi mạng vẫn giữ danh sách hiện tại.
+
 ## Chạy dự án
 
 Mở bằng Android Studio, cài Android SDK tương ứng cấu hình Gradle và đồng bộ dependencies.
@@ -49,15 +58,15 @@ Cài trên thiết bị Android đã cho phép USB debugging và cài qua USB:
 .\scripts\build-and-install.ps1
 ~~~
 
-Đọc [GOOGLE_SIGNIN_SETUP.md](GOOGLE_SIGNIN_SETUP.md) để tạo Google Cloud/OAuth. Không có OAuth/API key vẫn có thể mở liên kết YouTube bằng nút liên kết trên thanh công cụ và phát file/URL media riêng.
+Đọc [GOOGLE_SIGNIN_SETUP.md](GOOGLE_SIGNIN_SETUP.md) để tạo Google Cloud/OAuth cho tính năng tài khoản. Không có OAuth/API key vẫn có thể tìm kiếm, duyệt kênh và mở video công khai qua NewPipe, hoặc phát file/URL media riêng.
 
 Cấu hình Cloud là việc của **chủ ứng dụng**, không phải từng người dùng. Hướng dẫn đã có SHA-1/SHA-256 đối chiếu với APK 1.1.0, phân biệt debug/release/Play App Signing và cách chuyển từ thử nghiệm sang đăng nhập công khai. Bản release hiện chưa cấu hình khóa ký.
 
 ## Phần đã triển khai
 
-Xem video nhúng không yêu cầu đăng nhập. Trang chủ/tìm kiếm/bình luận công khai ưu tiên API key dùng chung của ứng dụng; chủ ứng dụng cần cấu hình key trước khi phát hành chế độ khách đầy đủ. Đăng nhập phục vụ dữ liệu cá nhân và tương tác, đồng thời lấy tên/ảnh kênh YouTube tương ứng. Tự nối lại phiên khi khởi động không mở hộp thoại cấp quyền; người dùng chủ động bấm kết nối khi cần.
+Xem video nhúng không yêu cầu đăng nhập. Trang chủ, tìm kiếm, Shorts và trang kênh lấy dữ liệu qua NewPipe Extractor; bình luận công khai và metadata bổ sung vẫn dùng Data API, cần API key hoặc phiên Google. Đăng nhập phục vụ dữ liệu cá nhân và tương tác, đồng thời lấy tên/ảnh kênh YouTube tương ứng. Tự nối lại phiên khi khởi động không mở hộp thoại cấp quyền; người dùng chủ động bấm kết nối khi cần.
 
-- Trang chủ lấy trực tiếp giao diện và danh sách gợi ý của YouTube qua WebView; tìm kiếm native theo từ khóa, chủ đề, ngày, độ dài và video đang trực tiếp.
+- Trang chủ native tổng hợp dữ liệu công khai qua NewPipe và tín hiệu tài khoản qua Google API; tìm kiếm theo từ khóa, chủ đề, ngày, độ dài và video đang trực tiếp.
 - Thumbnail, tiêu đề, kênh, lượt xem/ngày đăng khi API cung cấp.
 - Trình phát YouTube nhúng với nút điều khiển chính thức, toàn màn hình, nhớ vị trí xem, video tiếp theo và tùy chọn tự phát.
 - Danh sách video ngắn vuốt dọc; chỉ tạo player cho trang đang hiển thị.
@@ -81,7 +90,7 @@ Home dùng phiên web riêng, không nhập lịch sử xem hoặc cookie từ �
 
 Không có SDK quảng cáo của ứng dụng. Không chặn quảng cáo của trình phát YouTube; không thể cam kết mọi video YouTube không quảng cáo. Trình phát media riêng không chèn quảng cáo.
 
-**android_video_client_technical_design.md** là tài liệu định hướng ban đầu, không phải danh sách tính năng đã hoàn tất; implementation hiện sử dụng Data API chính thức và trình phát nhúng, không sử dụng InnerTube.
+**android_video_client_technical_design.md** là tài liệu định hướng ban đầu, không phải danh sách tính năng đã hoàn tất. Bản hiện tại kết hợp NewPipe Extractor cho khám phá công khai, Data API cho tài khoản và trình phát YouTube hiện có.
 
 ## Kiểm thử
 

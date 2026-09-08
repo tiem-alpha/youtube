@@ -67,7 +67,9 @@ class WebPlaybackService : Service() {
         if (intent.action == TIMER) { scheduleSleep(); return START_NOT_STICKY }
         val requestedOwner = intent.getStringExtra("owner").orEmpty()
         if (intent.action == STOP) {
-            if (requestedOwner == owner) stopSelf()
+            // Keep the service alive briefly while Compose replaces the player.
+            // A new owner's loading update takes over without losing its foreground session.
+            handler.postDelayed({ if (requestedOwner == owner) stopSelf() }, 750)
             return START_NOT_STICKY
         }
         if (intent.action == UPDATE) {

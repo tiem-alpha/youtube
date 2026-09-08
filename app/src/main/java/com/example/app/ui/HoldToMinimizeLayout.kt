@@ -10,6 +10,7 @@ import kotlin.math.abs
 /** Let player controls handle taps/seeking; take over a predominantly downward drag. */
 class HoldToMinimizeLayout(context: Context) : FrameLayout(context) {
     var dragEnabled = false
+    var dragBlocked: () -> Boolean = { false }
     var onDrag: (Float) -> Unit = {}
     var onMinimize: () -> Unit = {}
     var onExpand: (() -> Unit)? = null
@@ -19,6 +20,13 @@ class HoldToMinimizeLayout(context: Context) : FrameLayout(context) {
     private var startY = 0f
     private var eligible = false
     private var dragging = false
+
+    override fun requestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {
+        // A control/scroll container owns the whole gesture, including at its scroll edge.
+        // Releasing interception must not turn that same touch into a minimize gesture.
+        if (disallowIntercept && !dragging) eligible = false
+        super.requestDisallowInterceptTouchEvent(disallowIntercept)
+    }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         if (onExpand != null) {
@@ -36,11 +44,11 @@ class HoldToMinimizeLayout(context: Context) : FrameLayout(context) {
         }
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
             startX = event.rawX; startY = event.rawY
-            eligible = dragEnabled; dragging = false
+            eligible = dragEnabled && !dragBlocked(); dragging = false
         }
         val dx = event.rawX - startX
         val dy = event.rawY - startY
-        if (event.pointerCount > 1 || !dragEnabled) eligible = false
+        if (event.pointerCount > 1 || !dragEnabled || dragBlocked()) eligible = false
         if (eligible && !dragging && event.actionMasked == MotionEvent.ACTION_MOVE) {
             if ((abs(dx) > slop && abs(dx) > abs(dy)) || dy < -slop) eligible = false
             else if (dy > slop && dy > abs(dx) * 1.5f) {

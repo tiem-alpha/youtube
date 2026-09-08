@@ -2,6 +2,28 @@
 
 Bản: **1.1.0**, versionCode **2**, package **com.example.app**.
 
+## Sửa tạm dừng khi chuyển toàn màn hình / khóa máy — 2026-09-07
+
+- Chặn window visibility ở bước dispatch của BackgroundPlaybackWebView để các view con cũng được giữ trạng thái. Bọc custom view toàn màn hình của Chromium bằng BackgroundPlaybackLayout với cùng quy tắc; trước đây custom view nằm trực tiếp trong Dialog nên bỏ qua xử lý phát nền của WebView.
+- Khi vào/ra toàn màn hình, khôi phục phát nếu trạng thái trước khi chuyển là playing/buffering. Không khôi phục video đã pause hoặc khi màn hình xem bị dispose.
+- `assembleDebug`, `assembleDebugAndroidTest`, `lintDebug` qua; APK đã cài cập nhật thành công trên điện thoại. BackgroundPlaybackVisibilityTest: **4/4 qua**, kiểm tra truyền visibility đến view con cho cả khung thường/toàn màn hình và khi tắt phát nền.
+- WebPlaybackServiceTest chưa chạy xong: MIUI báo `Abort background activity starts` khi ActivityScenario mở Activity; đã dừng phiên test bị kẹt. Không tính bài này là đã qua.
+- Chưa xác nhận end-to-end nút toàn màn hình YouTube và khóa máy: ADB bị chặn INJECT_EVENTS, sau đó thiết bị ngắt kết nối. Cần thử video dài: bật/tắt toàn màn hình nhiều lần khi đang phát và khi pause; khóa máy ở cả hai chế độ ít nhất 5 phút; kiểm tra play/pause từ màn hình khóa và mở lại giữ tiến độ.
+
+## Cập nhật 2026-09-07: phục hồi, ẩn video và làm mới
+
+### Sửa cuộn popup bị kéo thu nhỏ video
+
+- HoldToMinimizeLayout tôn trọng quyền giữ cử chỉ của WebView và giữ quyền đó đến hết lần chạm. Nhận diện popup trong iframe qua document-start script, chặn thu nhỏ khi menu mở và khôi phục cho lần vuốt mới sau khi đóng menu. WebView không hỗ trợ thì dùng thanh tiêu đề/nút thu nhỏ.
+- 43 unit test, build APK và lint qua. 10 instrumentation test thuộc HoldToMinimizeTest và PlayerGestureGuardTest đã chạy thành công trên M2102J2SC / Android 13. Test WebView dùng HTML fixture trong iframe khác origin, kiểm tra mở menu/menu con chặn thu nhỏ và đóng menu khôi phục kéo; không thay thế xác nhận thủ công với menu YouTube trực tiếp.
+- Cài APK sau kiểm thử bị điện thoại từ chối: INSTALL_FAILED_USER_RESTRICTED (Install canceled by user). APK mới nằm tại app/build/outputs/apk/debug/app-debug.apk.
+
+- Thêm unit test lưu/khôi phục danh sách ẩn, tương thích dữ liệu cũ, và phân trang làm mới không trả lại video cũ/đã ẩn.
+- Bổ sung instrumentation test cho thứ tự đóng phiên cũ trước khi mở phiên mới; phải chờ qua thời gian bàn giao mà dịch vụ vẫn giữ phiên mới.
+- Cần kiểm tra trên điện thoại: khóa màn hình khi video vừa tải; phát nền rồi mở lại và đổi video nhiều lần; mất mạng rồi nối lại; pause không tự phát lại; thử lại giữ vị trí; loop không chuyển sang video kế tiếp.
+- Kiểm tra giao diện: bốn mục cài đặt, thay đổi tốc độ, ẩn ở Home/video cùng chủ đề/Shorts, khởi động lại vẫn ẩn; làm mới không trùng danh sách trước. Transcript hiện mở YouTube, chất lượng chọn bằng menu trong khung YouTube.
+- ADB không có thiết bị kết nối trong lần kiểm tra này; chưa chạy instrumentation hoặc xác nhận phát khi khóa màn hình trên máy thật.
+
 ## Sửa luồng YouTube xuống nền
 
 - Xác nhận trong mã: YouTubePlayer gọi pauseVideo và WebView.onPause tại ON_PAUSE, nên bản sửa wake lock cho Media3 trước đó không tác động đến video YouTube.

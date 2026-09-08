@@ -39,6 +39,7 @@ fun AccountDialog(vm: VideoViewModel, auth: Authorize, close: () -> Unit) {
                         .addOnFailureListener { busy = false; vm.notify("Không thu hồi được quyền. Hãy thử lại hoặc dùng trang quản lý quyền Google.") }
                 }, enabled = !busy) { Text("Thu hồi quyền truy cập Google") }
             }
+            TextButton({ auth.switchAccount { close() } }, enabled = !busy) { Text("Đăng nhập tài khoản khác") }
             TextButton({ openExternal(context, "https://myaccount.google.com/connections") }) { Text("Quản lý quyền trên Google") }
         }
     }, confirmButton = {

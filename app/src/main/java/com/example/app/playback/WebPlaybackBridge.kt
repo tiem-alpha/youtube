@@ -3,12 +3,25 @@ package com.example.app.playback
 import android.content.*
 import android.view.View
 import android.webkit.WebView
+import android.widget.FrameLayout
 import androidx.core.content.ContextCompat
 import java.util.UUID
 
 class BackgroundPlaybackWebView(context: Context, private val backgroundPlayback: Boolean) : WebView(context) {
-    override fun onWindowVisibilityChanged(visibility: Int) {
-        if (!backgroundPlayback || visibility == View.VISIBLE) super.onWindowVisibilityChanged(visibility)
+    var disposed = false
+        private set
+    override fun destroy() { disposed = true; super.destroy() }
+    override fun dispatchWindowVisibilityChanged(visibility: Int) {
+        // Filter before dispatch reaches Chromium's child views as well as the WebView.
+        // Filtering only onWindowVisibilityChanged still hides the video surface children.
+        if (!backgroundPlayback || visibility == View.VISIBLE) super.dispatchWindowVisibilityChanged(visibility)
+    }
+}
+
+/** Chromium moves playback into a separate view when entering HTML fullscreen. */
+class BackgroundPlaybackLayout(context: Context, private val backgroundPlayback: Boolean) : FrameLayout(context) {
+    override fun dispatchWindowVisibilityChanged(visibility: Int) {
+        if (!backgroundPlayback || visibility == View.VISIBLE) super.dispatchWindowVisibilityChanged(visibility)
     }
 }
 
@@ -38,8 +51,8 @@ class WebPlaybackBridge(private val context: Context, private val enabled: Boole
 
     fun update(state: Int, seconds: Int, title: String, duration: Int = 0, onError: () -> Unit) {
         if (!enabled || closed) return
-        // Ignore initialization/cued events. A session begins only after actual playback.
-        if (!started && state != 1) return
+        // Establish the foreground session while loading, before the screen can be locked.
+        if (!started && state !in listOf(1, 3)) return
         val snapshot = "$state|$seconds|$title|$duration"
         if (snapshot == previousSnapshot && state !in listOf(1, 3)) return
         previousSnapshot = snapshot

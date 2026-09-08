@@ -84,6 +84,8 @@ private fun VideoApp(incoming: String?, inPip: Boolean, consumed: () -> Unit, vm
         )) { mutableStateOf<VideoResult?>(null) }
         var showSearch by rememberSaveable { mutableStateOf(false) }
         var showTimer by remember { mutableStateOf(false) }
+        val playbackRate by remember { mutableFloatStateOf(vm.settings.getFloat("playbackRate", 1f)) }
+        val loopVideo by remember { mutableStateOf(vm.settings.getBoolean("loopVideo", false)) }
         val timerDeadline by WebPlaybackService.sleepDeadline.collectAsState()
         var remaining by remember { mutableStateOf(0L) }
         LaunchedEffect(timerDeadline) {
@@ -222,7 +224,7 @@ private fun VideoApp(incoming: String?, inPip: Boolean, consumed: () -> Unit, vm
                         onRefresh = { if (!state.loading) vm.load(state.request, refresh = true) },
                         modifier = Modifier.weight(1f)
                     ) {
-                        FeedList(state, Modifier.fillMaxSize(), vm::more, vm::retry, ::openVideo, vm::toggleLater)
+                        FeedList(state.copy(videos = state.videos.filterNot { it.id in library.hiddenIds }), Modifier.fillMaxSize(), vm::more, vm::retry, ::openVideo, vm::toggleLater, vm::hideVideo)
                     }
                 }
                 "shorts" -> ShortsScreen(vm, modifier, ::openVideo)
@@ -268,6 +270,7 @@ private fun VideoApp(incoming: String?, inPip: Boolean, consumed: () -> Unit, vm
                                 Icon(if (library.watchLater.any { it.id == video.id }) Icons.Default.Bookmark else Icons.Default.BookmarkAdd,
                                     if (library.watchLater.any { it.id == video.id }) "Bỏ khỏi xem sau" else "Thêm vào hàng đợi xem sau")
                             }
+                            if (expanded) IconButton({ vm.hideVideo(video) }) { Icon(Icons.Default.VisibilityOff, "Ẩn video khỏi gợi ý") }
                             if (expanded) IconButton({ showTimer = true }) { Icon(Icons.Default.Settings, "Cài đặt video") }
                             IconButton({ activeVideo = null; WebPlaybackService.setSleepTimer(context, 0); if (expanded) back() }) { Icon(Icons.Default.Close, "Đóng video") }
                         }
@@ -279,7 +282,7 @@ private fun VideoApp(incoming: String?, inPip: Boolean, consumed: () -> Unit, vm
                                     vm.recordVideo(video, 0)
                                     val index = state.videos.indexOfFirst { it.id == video.id }
                                     if (vm.settings.getBoolean("autoplay", false) && index >= 0) state.videos.getOrNull(index + 1)?.let(::openVideo)
-                                }, backgroundPlayback = true, title = video.title,
+                                }, backgroundPlayback = true, title = video.title, playbackRate = playbackRate, loop = loopVideo,
                                 onMinimize = if (expanded) ({ back() }) else null,
                                 onDrag = { playerDrag = it },
                                 onExpand = if (!expanded) ({ push(); route = "watch" }) else null)
@@ -300,15 +303,21 @@ private fun VideoApp(incoming: String?, inPip: Boolean, consumed: () -> Unit, vm
             }
             }
         }
-        if (showTimer) AlertDialog(onDismissRequest = { showTimer = false }, title = { Text("Cài đặt video") },
+        if (showTimer) AlertDialog(onDismissRequest = { showTimer = false }, title = { Text("Hẹn giờ tắt video") },
             text = { Column {
-                Text("Hẹn giờ tắt · Duration", style = MaterialTheme.typography.titleMedium)
-                Text(if (remaining > 0) "Còn ${remaining / 60} phút ${remaining % 60} giây" else "Chọn thời gian tự dừng phát")
+                Text(if (remaining > 0) "Tự dừng sau ${remaining / 60}:${(remaining % 60).toString().padStart(2, '0')}" else "Chọn thời gian tự dừng video")
                 listOf(30, 60, 90, 120).forEach { minutes ->
-                    TextButton({ WebPlaybackService.setSleepTimer(context, minutes); showTimer = false }) { Text("$minutes phút") }
+                    TextButton({
+                        WebPlaybackService.setSleepTimer(context, minutes)
+                        showTimer = false
+                    }, modifier = Modifier.fillMaxWidth()) { Text("$minutes phút") }
                 }
+                if (remaining > 0) TextButton({
+                    WebPlaybackService.setSleepTimer(context, 0)
+                    showTimer = false
+                }, modifier = Modifier.fillMaxWidth()) { Text("Hủy hẹn giờ") }
             } }, confirmButton = { TextButton({ showTimer = false }) { Text("Đóng") } },
-            dismissButton = { TextButton({ WebPlaybackService.setSleepTimer(context, 0); showTimer = false }) { Text("Hủy hẹn giờ") } })
+        )
         if (showLink) {
             var link by remember { mutableStateOf("") }
             AlertDialog(onDismissRequest = { showLink = false }, title = { Text("Mở video YouTube") },
@@ -324,14 +333,14 @@ private fun VideoApp(incoming: String?, inPip: Boolean, consumed: () -> Unit, vm
 }
 
 @Composable
-fun FeedList(state: SearchUiState, modifier: Modifier, more: () -> Unit, retry: () -> Unit, open: (VideoResult) -> Unit, later: (VideoResult) -> Unit) {
+fun FeedList(state: SearchUiState, modifier: Modifier, more: () -> Unit, retry: () -> Unit, open: (VideoResult) -> Unit, later: (VideoResult) -> Unit, hide: ((VideoResult) -> Unit)? = null) {
     LazyColumn(modifier, contentPadding = PaddingValues(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
         if (state.request.kind == FeedKind.Home) item {
             Text(state.heading, modifier = Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.labelLarge)
             state.explanation?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         }
         if (state.loading && state.videos.isNotEmpty()) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
-        items(state.videos, key = { it.playlistItemId.ifBlank { it.id } }) { video -> VideoCard(video, { open(video) }) { later(video) } }
+        items(state.videos, key = { it.playlistItemId.ifBlank { it.id } }) { video -> VideoCard(video, { open(video) }, hide = hide?.let { { it(video) } }) { later(video) } }
         if (state.loading) item { Loading() }
         state.message?.let { message -> item { MessageCard(message, "Thử lại", retry) } }
         if (!state.loading && state.message == null && state.videos.isEmpty()) item { MessageCard("Chưa có video phù hợp.") }
@@ -339,7 +348,7 @@ fun FeedList(state: SearchUiState, modifier: Modifier, more: () -> Unit, retry: 
     }
 }
 @Composable
-fun VideoCard(video: VideoResult, open: () -> Unit, later: (() -> Unit)? = null) {
+fun VideoCard(video: VideoResult, open: () -> Unit, hide: (() -> Unit)? = null, later: (() -> Unit)? = null) {
     Card(Modifier.fillMaxWidth().clickable(onClick = open), shape = RoundedCornerShape(0.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         RemoteImage(video.thumbnailUrl, Modifier.fillMaxWidth().aspectRatio(16f / 9))
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -350,6 +359,7 @@ fun VideoCard(video: VideoResult, open: () -> Unit, later: (() -> Unit)? = null)
                 if (detail.isNotBlank()) Text(detail, style = MaterialTheme.typography.labelSmall)
             }
             if (later != null) IconButton(later) { Icon(Icons.Default.BookmarkAdd, "Thêm hoặc bỏ xem sau trên máy") }
+            if (hide != null) IconButton(hide) { Icon(Icons.Default.VisibilityOff, "Ẩn video khỏi gợi ý") }
         }
     }
 }
@@ -367,7 +377,7 @@ private fun SettingsScreen(vm: VideoViewModel, dark: Boolean, changeDark: (Boole
         item { Row(verticalAlignment = Alignment.CenterVertically) { Text("Giao diện tối", Modifier.weight(1f)); Switch(dark, changeDark) } }
         item { OutlinedButton(account, Modifier.fillMaxWidth()) { Text("Quản lý tài khoản Google / YouTube") } }
         item { Text("Kết nối dữ liệu", style = MaterialTheme.typography.titleLarge) }
-        item { Text("Có thể duyệt bằng tài khoản Google hoặc API key của bạn. Mở liên kết YouTube trực tiếp không cần API key.") }
+        item { Text("Tìm kiếm và duyệt kênh không cần đăng nhập. Kết nối Google để dùng đăng ký kênh và thư viện tài khoản. API key là tùy chọn cho dữ liệu bổ sung như bình luận công khai.") }
         item { OutlinedTextField(key, { key = it }, Modifier.fillMaxWidth(), label = { Text("YouTube Data API key") }, singleLine = true, visualTransformation = PasswordVisualTransformation()) }
         item { Button({ vm.saveApiKey(key); vm.notify("Đã lưu cấu hình kết nối.") }) { Text("Lưu kết nối") } }
         item { Text("Dữ liệu trên thiết bị", style = MaterialTheme.typography.titleLarge) }
@@ -375,6 +385,7 @@ private fun SettingsScreen(vm: VideoViewModel, dark: Boolean, changeDark: (Boole
         item { Text("Ứng dụng không chèn quảng cáo riêng. Video YouTube dùng trình phát của YouTube và có thể chứa quảng cáo. File trên máy và URL media riêng không bị chèn quảng cáo.") }
         item { TextButton({ openExternal(context, "https://www.youtube.com/t/terms") }) { Text("Điều khoản YouTube") } }
         item { TextButton({ openExternal(context, "https://policies.google.com/privacy") }) { Text("Quyền riêng tư của Google") } }
+        item { TextButton({ openExternal(context, "https://github.com/TeamNewPipe/NewPipeExtractor/tree/v0.26.5") }) { Text("NewPipe Extractor 0.26.5 · GPL-3.0-or-later") } }
         item { Text("Lịch sử, xem sau, playlist và tìm kiếm trên máy được lưu cục bộ. Trình phát, ảnh và API gửi yêu cầu trực tiếp đến Google/YouTube. Token truy cập chỉ giữ trong bộ nhớ ứng dụng; không lưu mật khẩu. Các thao tác thích, đăng ký và đăng bình luận chỉ gửi khi bạn chọn.") }
     }
     if (clear) AlertDialog(onDismissRequest = { clear = false }, title = { Text("Xóa dữ liệu trên máy?") }, text = { Text("Lịch sử, xem sau, playlist và tìm kiếm đã lưu trên thiết bị sẽ bị xóa. Dữ liệu trên tài khoản YouTube không bị ảnh hưởng.") }, confirmButton = { TextButton({ vm.clearLocalData(); clear = false }) { Text("Xóa") } }, dismissButton = { TextButton({ clear = false }) { Text("Hủy") } })

@@ -12,7 +12,12 @@ import com.google.android.gms.auth.api.identity.Identity
 import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.common.api.Scope
 
-typealias Authorize = (Boolean, () -> Unit) -> Unit
+class Authorize(
+    private val authorize: (Boolean, Boolean, () -> Unit) -> Unit
+) {
+    operator fun invoke(write: Boolean, action: () -> Unit) = authorize(write, false, action)
+    fun switchAccount(action: () -> Unit) = authorize(false, true, action)
+}
 
 @Composable
 fun rememberYouTubeAuthorization(vm: VideoViewModel): Authorize {
@@ -43,14 +48,15 @@ fun rememberYouTubeAuthorization(vm: VideoViewModel): Authorize {
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
         try { accept(client.getAuthorizationResultFromIntent(result.data)) } catch (e: Exception) { fail(e) }
     }
-    fun authorize(write: Boolean, interactive: Boolean, action: () -> Unit) {
-        if (vm.hasSession(write)) action()
+    fun authorize(write: Boolean, interactive: Boolean, selectAccount: Boolean = false, action: () -> Unit) {
+        if (!selectAccount && vm.hasSession(write)) action()
         else if (!busy) {
             busy = true; pending = action
             val scopes = setOf(VideoViewModel.READ_SCOPE, "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile") + if (write) setOf(VideoViewModel.WRITE_SCOPE) else emptySet()
             requested = scopes
             val builder = AuthorizationRequest.builder().setRequestedScopes(scopes.map(::Scope))
-            vm.account.value?.email?.takeIf(String::isNotBlank)?.let { builder.setAccount(Account(it, "com.google")) }
+            if (selectAccount) builder.setPrompt(AuthorizationRequest.Prompt.SELECT_ACCOUNT)
+            else vm.account.value?.email?.takeIf(String::isNotBlank)?.let { builder.setAccount(Account(it, "com.google")) }
             client.authorize(builder.build()).addOnSuccessListener { result ->
                 if (result.hasResolution()) {
                     if (!interactive) { busy = false; pending = null }
@@ -65,5 +71,5 @@ fun rememberYouTubeAuthorization(vm: VideoViewModel): Authorize {
     }
     val recovery = rememberRecoveryTrigger()
     LaunchedEffect(recovery) { if (vm.settings.getBoolean("reconnect", false)) authorize(false, false) {} }
-    return { write, action -> authorize(write, true, action) }
+    return Authorize { write, selectAccount, action -> authorize(write, true, selectAccount, action) }
 }

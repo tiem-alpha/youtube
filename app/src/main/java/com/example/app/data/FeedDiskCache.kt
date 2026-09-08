@@ -9,7 +9,7 @@ data class CachedFeed(val page: Page<VideoResult>, val fresh: Boolean, val saved
 
 class FeedDiskCache(directory: File, private val clock: () -> Long = System::currentTimeMillis) {
     private val disk = BoundedDiskCache(directory, 4L * 1024 * 1024, clock)
-    private fun key(request: FeedRequest) = "feed-v1:" + JSONArray(listOf(request.kind.name, request.query,
+    private fun key(request: FeedRequest) = "feed-v2-newpipe:" + JSONArray(listOf(request.kind.name, request.query,
         request.resourceId, request.order, request.duration, request.liveOnly, request.categoryId)).toString()
     fun read(request: FeedRequest): CachedFeed? {
         if (request.requiresAccount || request.liveOnly || request.kind == FeedKind.Home) return null

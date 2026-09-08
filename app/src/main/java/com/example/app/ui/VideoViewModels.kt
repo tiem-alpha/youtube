@@ -28,7 +28,7 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
     private var accessToken: String? = null
     private var tokenExpiresAt = 0L
     var grantedScopes: Set<String> = emptySet(); private set
-    val repository = YouTubeDataRepository({ accessToken?.takeIf { System.currentTimeMillis() < tokenExpiresAt } }, { settings.getString("apiKey", null)?.takeIf(String::isNotBlank) ?: BuildConfig.YOUTUBE_API_KEY }, { accessToken = null; tokenExpiresAt = 0 })
+    val repository = YouTubeDataRepository({ accessToken?.takeIf { System.currentTimeMillis() < tokenExpiresAt } }, { settings.getString("apiKey", null)?.takeIf(String::isNotBlank) ?: BuildConfig.YOUTUBE_API_KEY }, { accessToken = null; tokenExpiresAt = 0 }, publicSource = NewPipePublicSource())
     private val _account = MutableStateFlow<GoogleProfile?>(null)
     val account = _account.asStateFlow()
     private val _youtubeChannel = MutableStateFlow<Channel?>(null)
@@ -56,7 +56,7 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
         val owners = settings.getStringSet("recommendationOwners", emptySet()).orEmpty() + "guest"
         owners.forEach { owner ->
             val history = LocalLibrary(getApplication(), "recommendation_history_$owner")
-            if (videoId == null) history.clearHistory() else history.removeHistory(videoId)
+            if (videoId == null) { history.clearHistory(); history.clearSearches() } else history.removeHistory(videoId)
             diskHome.remove(if (owner == "guest") "guest" else "account:$owner")
         }
         recommendationHistory = LocalLibrary(getApplication(), "recommendation_history_${_account.value?.id ?: "guest"}")
@@ -74,7 +74,16 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
     private var subscriptionSeeds: List<Channel> = emptyList()
     private var signalsLoadedAt = 0L
 
-    init { load(FeedRequest()) }
+    private fun migrateLegacySearches() {
+        if (settings.getBoolean("homeSearchesMigrated", false)) return
+        val owners = settings.getStringSet("recommendationOwners", emptySet()).orEmpty()
+        if (!LocalLibrary.canImportLegacySearches(_account.value?.id, owners)) return
+        recommendationHistory.importSearches(library.state.value.searches)
+        settings.edit().putBoolean("homeSearchesMigrated", true).apply()
+        diskHome.remove(homeOwner())
+    }
+
+    init { migrateLegacySearches(); load(FeedRequest()) }
     fun hasSession(write: Boolean = false) = accessToken != null && System.currentTimeMillis() < tokenExpiresAt && (!write || WRITE_SCOPE in grantedScopes)
     fun connect(token: String, scopes: Set<String>, onConnected: () -> Unit) {
         val generation = ++sessionGeneration
@@ -86,6 +95,7 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
                 grantedScopes = scopes; _account.value = profile; _youtubeChannel.value = null
                 recommendationHistory = LocalLibrary(getApplication(), "recommendation_history_${profile.id}")
                 settings.edit().putStringSet("recommendationOwners", settings.getStringSet("recommendationOwners", emptySet()).orEmpty() + profile.id).apply()
+                migrateLegacySearches()
                 resetAccountData()
                 settings.edit().putBoolean("reconnect", true).apply()
                 if (_state.value.request.requiresAccount || _state.value.request.kind == FeedKind.Home) {
@@ -144,6 +154,14 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
         library.toggleLater(video)
         notify(if (library.state.value.watchLater.any { it.id == video.id }) "Đã thêm vào hàng đợi xem sau trong Thư viện." else "Đã bỏ khỏi xem sau.")
     }
+    fun hideVideo(video: VideoResult) {
+        library.hide(video.id)
+        if (_state.value.request.kind == FeedKind.Home) {
+            _state.value = _state.value.copy(videos = _state.value.videos.filterNot { it.id == video.id })
+        }
+        feedCache.remove(FeedRequest()); feedCachedAt.remove(FeedRequest())
+        notify("Đã ẩn video khỏi gợi ý.")
+    }
     fun recoverFeed() {
         if (_state.value.loading) return
         load(_state.value.request, refresh = _state.value.message != null)
@@ -159,7 +177,7 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
         if (!refresh && cached != null && cached.message == null && fresh && !request.liveOnly && !request.requiresAccount) { _state.value = cached.copy(loading = false); return }
         feedJob = viewModelScope.launch {
             if (request.kind == FeedKind.Home) {
-                if (refresh) signalsLoadedAt = 0
+                // Refresh advances the existing interest sources without rotating topics.
                 if (cached == null && !refresh) {
                     val saved = withContext(Dispatchers.IO) { diskHome.read(homeOwner()) }
                     if (saved != null) {
@@ -170,7 +188,7 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 _state.value = _state.value.copy(loading = true)
-                fetch(false)
+                fetch(false, refresh)
                 return@launch
             }
             if (cached == null && !refresh) {
@@ -212,11 +230,11 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
         _state.value = _state.value.copy(loading = true, message = null)
         feedJob = viewModelScope.launch { fetch(true) }
     }
-    private suspend fun fetch(append: Boolean) {
+    private suspend fun fetch(append: Boolean, refreshHome: Boolean = false) {
         val current = _state.value
         try {
             // Give silent Google restoration time to finish before issuing token-only requests.
-            if (settings.getBoolean("reconnect", false) && !hasSession() &&
+            if (current.request.requiresAccount && settings.getBoolean("reconnect", false) && !hasSession() &&
                 settings.getString("apiKey", null).isNullOrBlank() && BuildConfig.YOUTUBE_API_KEY.isBlank()) {
                 kotlinx.coroutines.withTimeoutOrNull(8_000) {
                     while (!hasSession()) kotlinx.coroutines.delay(100)
@@ -228,7 +246,7 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             if (current.request.kind == FeedKind.Home) {
-                kotlinx.coroutines.withTimeout(30_000) { fetchHome(current, append) }
+                kotlinx.coroutines.withTimeout(30_000) { fetchHome(current, append, refreshHome) }
                 return
             }
             val page = kotlinx.coroutines.withTimeout(30_000) { repository.feed(current.request, if (append) current.nextToken else null) }
@@ -242,13 +260,13 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
         catch (e: Exception) { _state.value = current.copy(loading = false, message = errorMessage(e)) }
     }
     private fun homeState(request: FeedRequest, page: HomePage) = SearchUiState(request = request,
-        videos = page.items, homeCursor = page.next, nextToken = if (page.next != null) "home-more" else null,
+        videos = page.items.filter { HomeRecommendations.eligible(it) && it.id !in library.state.value.hiddenIds }, homeCursor = page.next, nextToken = if (page.next != null) "home-more" else null,
         heading = if (_account.value != null) "Gợi ý cho ${_account.value!!.name}" else "Gợi ý cho bạn",
         explanation = if (_account.value != null) "Từ video đã xem trong app, video đã thích và kênh đăng ký."
             else "Dựa trên video đã xem trong app. Kết nối Google để thêm gợi ý từ kênh đăng ký.",
         message = if (page.partial) "Một số nguồn chưa tải được. Bạn có thể thử lại." else null)
 
-    private suspend fun fetchHome(current: SearchUiState, append: Boolean) {
+    private suspend fun fetchHome(current: SearchUiState, append: Boolean, refresh: Boolean) {
         val owner = homeOwner()
         var signalsFailed = _account.value != null && !hasSession()
         if (!append && hasSession() && System.currentTimeMillis() - signalsLoadedAt > 10 * 60_000L) {
@@ -262,17 +280,24 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
                     val page = repository.subscriptions(token)
                     channels += page.items; token = page.nextToken
                 } while (token != null && channels.size < 200)
-                // Rotate discovery across subscriptions between refresh windows, instead of always A–B.
-                val offset = if (channels.isEmpty()) 0 else ((System.currentTimeMillis() / (10 * 60_000L)) % channels.size).toInt()
-                subscriptionSeeds = channels.drop(offset) + channels.take(offset)
+                subscriptionSeeds = channels.distinctBy { it.id }
             }
             catch (e: CancellationException) { throw e }
             catch (_: Exception) { signalsFailed = true }
             if (!signalsFailed) signalsLoadedAt = System.currentTimeMillis()
         }
         val history = recommendationHistory.state.value.history
-        val cursor = if (append) current.homeCursor ?: return else HomeRecommendations.plan(history, likedSeeds, subscriptionSeeds)
-        val page = HomeRecommendations.load(cursor) { request, token -> repository.feed(request, token) }
+        val base = if (append) current.homeCursor ?: return
+            else if (refresh) current.homeCursor ?: HomeRecommendations.plan(history, likedSeeds, subscriptionSeeds, recommendationHistory.state.value.searches)
+            else HomeRecommendations.plan(history, likedSeeds, subscriptionSeeds, recommendationHistory.state.value.searches)
+        val cursor = base.copy(excludedIds = base.excludedIds + history.map { it.video.id } + library.state.value.hiddenIds +
+            (if (refresh) current.videos.map { it.id } else emptyList()))
+        var page = HomeRecommendations.load(cursor) { request, token -> repository.feed(request, token) }
+        // Skip fully excluded pages, bounded to avoid draining API quota on a failed source.
+        var skipped = 0
+        while (page.items.isEmpty() && page.next != null && !page.partial && skipped++ < 3) {
+            page = HomeRecommendations.load(page.next!!) { request, token -> repository.feed(request, token) }
+        }
         val combined = page.copy(items = ((if (append) current.videos else emptyList()) + page.items).distinctBy { it.id })
         _state.value = homeState(current.request, combined).let {
             if (signalsFailed) it.copy(message = "Chưa tải đủ dữ liệu tài khoản. Hãy thử lại hoặc kết nối lại Google.") else it
@@ -282,6 +307,11 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun search(query: String, order: String = "relevance", duration: String = "any", live: Boolean = false) {
         library.search(query)
+        if (query.isNotBlank()) {
+            recommendationHistory.search(query)
+            feedCache.remove(FeedRequest()); feedCachedAt.remove(FeedRequest())
+            diskHome.remove(homeOwner())
+        }
         load(FeedRequest(if (query.isBlank()) FeedKind.Home else FeedKind.Search, query.trim(), order = order, duration = duration, liveOnly = live))
     }
     fun saveApiKey(key: String) { settings.edit().putString("apiKey", key.trim()).apply(); load(_state.value.request, refresh = true) }
@@ -292,6 +322,7 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
     }
 }
 fun errorMessage(error: Exception): String = when (error) {
+    is PublicBrowseException -> error.message.orEmpty()
     is YouTubeApiException -> error.message.orEmpty()
     is java.io.IOException -> "Không thể kết nối. Kiểm tra mạng và thử lại."
     else -> "Không thể hoàn tất thao tác. Vui lòng thử lại."

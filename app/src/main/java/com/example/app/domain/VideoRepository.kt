@@ -4,7 +4,7 @@ data class VideoResult(
     val id: String, val title: String, val channel: String, val thumbnailUrl: String?,
     val channelId: String = "", val description: String = "", val publishedAt: String = "",
     val duration: String = "", val views: String = "", val live: Boolean = false,
-    val playlistItemId: String = "", val categoryId: String = ""
+    val playlistItemId: String = "", val categoryId: String = "", val isShort: Boolean = false
 )
 data class Page<T>(val items: List<T>, val nextToken: String? = null)
 data class Channel(val id: String, val title: String, val thumbnail: String?, val description: String = "", val subscribers: String = "", val uploads: String = "", val subscriptionId: String = "")

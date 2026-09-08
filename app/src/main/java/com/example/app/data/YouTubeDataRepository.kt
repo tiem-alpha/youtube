@@ -1,6 +1,7 @@
 ﻿package com.example.app.data
 
 import com.example.app.BuildConfig
+import android.util.Log
 import com.example.app.domain.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -28,10 +29,15 @@ object YouTubeJson {
             snippet.optString("liveBroadcastContent") == "live", if (resource != null) item.optString("id") else "", snippet.optString("categoryId"))
     }
     fun error(status: Int, body: String): YouTubeApiException {
-        val reason = runCatching { JSONObject(body).optJSONObject("error")?.optJSONArray("errors")?.optJSONObject(0)?.optString("reason") }.getOrNull().orEmpty()
+        val error = runCatching { JSONObject(body).optJSONObject("error") }.getOrNull()
+        val reason = error?.optJSONArray("errors")?.optJSONObject(0)?.optString("reason").orEmpty()
+        val details = error?.optJSONArray("details")
+        val dailyQuota = (0 until (details?.length() ?: 0)).any { index ->
+            details?.optJSONObject(index)?.optJSONObject("metadata")?.optString("quota_unit")?.startsWith("1/d/") == true
+        }
         val message = when {
             status == 401 -> "Phiên đăng nhập đã hết hạn. Hãy kết nối lại tài khoản."
-            reason in listOf("quotaExceeded", "dailyLimitExceeded") -> "YouTube API đã hết hạn mức hôm nay. Vui lòng thử lại sau."
+            reason in listOf("quotaExceeded", "dailyLimitExceeded") || dailyQuota -> "YouTube API đã hết hạn mức hôm nay. Vui lòng thử lại sau khi hạn mức được đặt lại."
             reason == "commentsDisabled" -> "Video này đã tắt bình luận."
             reason == "accessNotConfigured" -> "Cần bật YouTube Data API v3 trong Google Cloud."
             reason == "insufficientPermissions" -> "Tài khoản chưa cấp đủ quyền YouTube cho thao tác này."
@@ -44,7 +50,7 @@ object YouTubeJson {
     }
 }
 
-class YouTubeDataRepository(private val token: () -> String? = { null }, private val apiKey: () -> String = { BuildConfig.YOUTUBE_API_KEY }, private val onUnauthorized: () -> Unit = {}, private val baseUrl: String = "https://www.googleapis.com/youtube/v3/") : VideoRepository {
+class YouTubeDataRepository(private val token: () -> String? = { null }, private val apiKey: () -> String = { BuildConfig.YOUTUBE_API_KEY }, private val onUnauthorized: () -> Unit = {}, private val baseUrl: String = "https://www.googleapis.com/youtube/v3/", private val publicSource: PublicVideoSource? = null) : VideoRepository {
     private suspend fun request(path: String, params: Map<String, String> = emptyMap(), method: String = "GET", body: JSONObject? = null, authenticated: Boolean = false, preferApiKey: Boolean = false): JSONObject = withContext(Dispatchers.IO) {
         val accessToken = if (preferApiKey && !authenticated && apiKey().isNotBlank()) null else token()
         if (authenticated && accessToken.isNullOrBlank()) throw YouTubeApiException(401, "loginRequired", "Hãy đăng nhập để sử dụng tính năng này.")
@@ -64,15 +70,27 @@ class YouTubeDataRepository(private val token: () -> String? = { null }, private
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
             val response = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
             if (code == 401 && !accessToken.isNullOrBlank()) onUnauthorized()
-            if (code !in 200..299) throw YouTubeJson.error(code, response)
+            if (code !in 200..299) {
+                if (BuildConfig.DEBUG) {
+                    val error = runCatching { JSONObject(response).optJSONObject("error") }.getOrNull()
+                    var diagnostic = error?.toString() ?: "Non-JSON error response"
+                    listOfNotNull(accessToken, apiKey().takeIf(String::isNotBlank)).forEach {
+                        diagnostic = diagnostic.replace(it, "[REDACTED]")
+                    }
+                    runCatching { Log.w("YouTubeApi", "$method $path HTTP=$code auth=${if (accessToken.isNullOrBlank()) "apiKey" else "oauth"} retryAfter=${connection.getHeaderField("Retry-After")} error=$diagnostic") }
+                }
+                throw YouTubeJson.error(code, response)
+            }
             if (response.isBlank()) JSONObject() else JSONObject(response)
         } finally { connection.disconnect() }
     }
 
     override suspend fun search(query: String): SearchResult = try { SearchResult.Success(feed(FeedRequest(FeedKind.Search, query)).items) }
         catch (e: YouTubeApiException) { if (e.reason == "notConfigured") SearchResult.ProviderNotConfigured else SearchResult.Failure(e.message.orEmpty()) }
+        catch (e: PublicBrowseException) { SearchResult.Failure(e.message.orEmpty()) }
 
     suspend fun feed(feed: FeedRequest, page: String? = null): Page<VideoResult> {
+        if (publicSource != null && !feed.requiresAccount) return publicSource.feed(feed, page)
         val params = mutableMapOf("part" to "snippet", "maxResults" to "25", "pageToken" to page.orEmpty())
         val path = when (feed.kind) {
             FeedKind.Home -> { params["part"] = "snippet,contentDetails,statistics"; params["chart"] = "mostPopular"; params["regionCode"] = "VN"; params["videoCategoryId"] = feed.categoryId; "videos" }
@@ -91,13 +109,19 @@ class YouTubeDataRepository(private val token: () -> String? = { null }, private
         val json = request(path, params, authenticated = feed.requiresAccount, preferApiKey = !feed.requiresAccount)
         return Page(json.items().mapNotNull(YouTubeJson::video), json.next())
     }
-    suspend fun video(id: String): VideoResult = request("videos", mapOf("part" to "snippet,contentDetails,statistics", "id" to id), preferApiKey = true).items().firstOrNull()?.let(YouTubeJson::video)
+    suspend fun video(id: String): VideoResult {
+        if (publicSource != null && token().isNullOrBlank() && apiKey().isBlank()) return publicSource.video(id)
+        return request("videos", mapOf("part" to "snippet,contentDetails,statistics", "id" to id), preferApiKey = true).items().firstOrNull()?.let(YouTubeJson::video)
         ?: throw YouTubeApiException(404, "notFound", "Video không tồn tại hoặc ở chế độ riêng tư.")
+    }
 
-    suspend fun channel(id: String): Channel = request("channels", mapOf("part" to "snippet,statistics,contentDetails", "id" to id), preferApiKey = true).items().firstOrNull()?.let {
+    suspend fun channel(id: String): Channel {
+        if (publicSource != null) return publicSource.channel(id)
+        return request("channels", mapOf("part" to "snippet,statistics,contentDetails", "id" to id), preferApiKey = true).items().firstOrNull()?.let {
         val s = it.getJSONObject("snippet")
         Channel(it.getString("id"), s.optString("title"), YouTubeJson.thumbnail(s), s.optString("description"), it.optJSONObject("statistics")?.optString("subscriberCount").orEmpty(), it.optJSONObject("contentDetails")?.optJSONObject("relatedPlaylists")?.optString("uploads").orEmpty())
     } ?: throw YouTubeApiException(404, "notFound", "Không tìm thấy kênh.")
+    }
 
     suspend fun myChannel(): Channel? = request("channels", mapOf("part" to "snippet", "mine" to "true"), authenticated = true).items().firstOrNull()?.let {
         val snippet = it.getJSONObject("snippet")

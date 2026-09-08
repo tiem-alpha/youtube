@@ -36,6 +36,7 @@ import androidx.media3.ui.PlayerView
 import com.example.app.domain.YouTubeLinks
 import com.example.app.playback.PlaybackManager
 import com.example.app.playback.BackgroundPlaybackWebView
+import com.example.app.playback.BackgroundPlaybackLayout
 import com.example.app.playback.WebPlaybackBridge
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -102,12 +103,17 @@ fun shareVideo(context: Context, id: String) {
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modifier, onProgress: (Int) -> Unit = {}, onEnded: () -> Unit = {}, backgroundPlayback: Boolean = false, title: String = "Video YouTube", onMinimize: (() -> Unit)? = null, onDrag: (Float) -> Unit = {}, onExpand: (() -> Unit)? = null) {
+fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modifier, onProgress: (Int) -> Unit = {}, onEnded: () -> Unit = {}, backgroundPlayback: Boolean = false, title: String = "Video YouTube", onMinimize: (() -> Unit)? = null, onDrag: (Float) -> Unit = {}, onExpand: (() -> Unit)? = null, playbackRate: Float = 1f, loop: Boolean = false) {
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
     val progress by rememberUpdatedState(onProgress)
     val ended by rememberUpdatedState(onEnded)
     val currentTitle by rememberUpdatedState(title)
+    val currentLoop by rememberUpdatedState(loop)
+    var lastHeartbeat by remember(videoId) { mutableLongStateOf(android.os.SystemClock.elapsedRealtime()) }
+    var expectsPlayback by remember(videoId) { mutableStateOf(true) }
+    var playerState by remember(videoId) { mutableIntStateOf(-1) }
+    var automaticRetries by remember(videoId) { mutableIntStateOf(0) }
     var attempt by remember(videoId) { mutableIntStateOf(0) }
     var resumeSeconds by remember(videoId) { mutableIntStateOf(startSeconds) }
     var loading by remember(videoId) { mutableStateOf(true) }
@@ -118,8 +124,16 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
     var error by remember(videoId) { mutableStateOf<String?>(null) }
     var fullscreen by remember { mutableStateOf<Dialog?>(null) }
     var customCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
-    fun exitFullscreen() { fullscreen?.dismiss(); fullscreen = null; customCallback?.onCustomViewHidden(); customCallback = null }
-    val webView = remember(videoId, attempt) {
+    var restoreFullscreenPlayback by remember { mutableStateOf<(() -> Unit)?>(null) }
+    fun exitFullscreen(resumePlayback: Boolean = true) {
+        val restore = restoreFullscreenPlayback.takeIf { resumePlayback && playerState in listOf(1, 3) }
+        fullscreen?.dismiss(); fullscreen = null
+        customCallback?.onCustomViewHidden(); customCallback = null
+        restoreFullscreenPlayback = null
+        restore?.invoke()
+    }
+    val gestureGuard = remember(videoId, attempt, backgroundPlayback) { PlayerGestureGuard() }
+    val webView = remember(videoId, attempt, backgroundPlayback) {
         BackgroundPlaybackWebView(context, backgroundPlayback).apply {
             // A wrap-content WebView can give percentage-height HTML a zero-height viewport.
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
@@ -128,17 +142,24 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
             settings.mediaPlaybackRequiresUserGesture = false
             settings.allowFileAccess = false; settings.allowContentAccess = false
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            gestureGuard.install(this)
             addJavascriptInterface(object {
-                @JavascriptInterface fun position(seconds: Int) { post { resumeSeconds = seconds.coerceAtLeast(0); progress(resumeSeconds) } }
-                @JavascriptInterface fun finished() { post { ended() } }
+                @JavascriptInterface fun position(seconds: Int) { post { if (!disposed) { resumeSeconds = seconds.coerceAtLeast(0); progress(resumeSeconds) } } }
+                @JavascriptInterface fun finished() { post { if (!disposed) {
+                    if (currentLoop) evaluateJavascript("player.seekTo(0,true);player.playVideo();", null) else ended()
+                } } }
                 @JavascriptInterface fun playback(state: Int, seconds: Int, duration: Int) { post {
+                    if (disposed) return@post
+                    playerState = state
+                    lastHeartbeat = android.os.SystemClock.elapsedRealtime()
+                    expectsPlayback = state in listOf(-1, 1, 3)
                     buffering = state == 3
-                    loading = error == null && (state == 3 || state == -1)
                     if (state == 1) { error = null; retryable = false }
+                    loading = error == null && (state == 3 || state == -1)
                     if (state == 3) retryable = true
                     bridge.update(state, seconds, currentTitle, duration) { error = "Không khởi động được phát nền. Mở lại màn hình video rồi bấm Phát." }
                 } }
-                @JavascriptInterface fun failed(code: Int) { post { loading = false; retryable = code == 5; error = when (code) {
+                @JavascriptInterface fun failed(code: Int) { post { if (disposed) return@post; expectsPlayback = false; loading = false; retryable = code == 5; error = when (code) {
                     101, 150 -> "Chủ sở hữu không cho phép phát nhúng. Bạn có thể mở video trên YouTube."
                     100 -> "Video không tồn tại hoặc ở chế độ riêng tư."
                     else -> "YouTube không phát được video (mã $code). Thử lại hoặc mở trên YouTube."
@@ -152,6 +173,7 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
                 }
                 override fun onReceivedError(view: WebView, request: WebResourceRequest, webError: WebResourceError) {
                     if (request.isForMainFrame) {
+                        if (disposed) return
                         loading = false; retryable = true
                         error = "Không tải được trình phát. Kiểm tra mạng và thử lại."
                     }
@@ -160,11 +182,25 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
             webChromeClient = object : WebChromeClient() {
                 override fun onShowCustomView(view: View, callback: CustomViewCallback) {
                     if (fullscreen != null) { callback.onCustomViewHidden(); return }
+                    val wasPlaying = playerState in listOf(1, 3)
+                    // Chromium briefly hides the document while transferring it between views.
+                    // Restore only playback that was active before this fullscreen transition.
+                    val restore = {
+                        post {
+                            if (!disposed) evaluateJavascript("if(player&&player.playVideo)player.playVideo();", null)
+                        }
+                        Unit
+                    }
+                    restoreFullscreenPlayback = restore
                     customCallback = callback
                     fullscreen = Dialog(context, android.R.style.Theme_Black_NoTitleBar_Fullscreen).apply {
-                        setContentView(view); window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        setContentView(BackgroundPlaybackLayout(context, backgroundPlayback).apply {
+                            addView(view, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                        })
+                        window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                         setOnCancelListener { exitFullscreen() }; show()
                     }
+                    if (wasPlaying) restore()
                 }
                 override fun onHideCustomView() { exitFullscreen() }
             }
@@ -177,7 +213,7 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
                     <body><div id="player"></div><script src="https://www.youtube.com/iframe_api"></script><script>
                     var player; function reportPlayback(){if(player&&player.getPlayerState&&player.getCurrentTime)Companion.playback(player.getPlayerState(),Math.floor(player.getCurrentTime()),Math.floor(player.getDuration()||0));}
                     function onYouTubeIframeAPIReady(){player=new YT.Player('player',{width:'100%',height:'100%',videoId:'$id',playerVars:{controls:1,fs:1,playsinline:1,autoplay:1,start:${resumeSeconds.coerceAtLeast(0)},origin:'$origin'},events:{
-                    onStateChange:function(e){reportPlayback();if(e.data===0)Companion.finished();},onError:function(e){Companion.playback(2,0,0);Companion.failed(e.data);}}});}
+                    onReady:function(e){e.target.setPlaybackRate($playbackRate);e.target.playVideo();},onStateChange:function(e){reportPlayback();if(e.data===0)Companion.finished();},onError:function(e){Companion.playback(2,0,0);Companion.failed(e.data);}}});}
                     setInterval(function(){reportPlayback();if(player&&player.getPlayerState&&player.getPlayerState()===1)Companion.position(Math.floor(player.getCurrentTime()));},5000);
                     </script></body></html>
                 """.trimIndent(), "text/html", "UTF-8", null)
@@ -186,33 +222,51 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
     }
     LaunchedEffect(recovery) {
         if (recovery > 0 && retryable && (error != null || buffering)) {
-            error = null; loading = true; buffering = false; attempt++
+            automaticRetries = 0; error = null; loading = true; buffering = false; attempt++
         }
     }
-    LaunchedEffect(videoId, attempt, loading) {
-        if (loading) {
-            kotlinx.coroutines.delay(30_000)
-            loading = false; retryable = true
-            error = "Tải video quá lâu. Kiểm tra mạng rồi thử lại."
+    LaunchedEffect(webView, playbackRate) {
+        webView.evaluateJavascript("if(player&&player.setPlaybackRate)player.setPlaybackRate($playbackRate);", null)
+    }
+    LaunchedEffect(webView, loading) {
+        val since = android.os.SystemClock.elapsedRealtime()
+        while (true) {
+            kotlinx.coroutines.delay(2_000)
+            val now = android.os.SystemClock.elapsedRealtime()
+            if ((loading && now - since >= 20_000) || (expectsPlayback && now - lastHeartbeat >= 20_000)) {
+                if (automaticRetries < 2 && (retryable || expectsPlayback)) {
+                    automaticRetries++; error = null; loading = true; buffering = false
+                    lastHeartbeat = now; attempt++
+                } else {
+                    expectsPlayback = false; loading = false; retryable = true
+                    error = "Tải video quá lâu. Kiểm tra mạng rồi thử lại."
+                }
+                break
+            }
         }
     }
     BackHandler(fullscreen != null) { exitFullscreen() }
     DisposableEffect(webView, owner) {
         bridge.attach(webView)
+        lastHeartbeat = android.os.SystemClock.elapsedRealtime()
+        bridge.update(3, resumeSeconds, currentTitle) { error = "Không khởi động được phát nền. Bấm Thử lại khi mở ứng dụng." }
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_PAUSE && !backgroundPlayback) { webView.evaluateJavascript("if(player&&player.pauseVideo)player.pauseVideo();", null); webView.onPause() }
-            if (event == Lifecycle.Event.ON_RESUME) webView.onResume()
+            if (event == Lifecycle.Event.ON_RESUME) {
+                webView.onResume()
+                webView.evaluateJavascript("reportPlayback();", null)
+            }
         }
         owner.lifecycle.addObserver(observer)
-        onDispose { owner.lifecycle.removeObserver(observer); bridge.close(); exitFullscreen(); webView.stopLoading(); webView.removeJavascriptInterface("Companion"); webView.destroy() }
+        onDispose { owner.lifecycle.removeObserver(observer); bridge.close(); exitFullscreen(resumePlayback = false); webView.stopLoading(); webView.removeJavascriptInterface("Companion"); webView.destroy() }
     }
     Column(modifier) {
         key(webView) { AndroidView(factory = { HoldToMinimizeLayout(it).apply { addView(webView) } },
-            update = { it.dragEnabled = onMinimize != null && fullscreen == null; it.onMinimize = { onMinimize?.invoke() }; it.onDrag = onDrag; it.onExpand = onExpand },
+            update = { it.dragEnabled = onMinimize != null && fullscreen == null; it.dragBlocked = { gestureGuard.popupOpen }; it.onMinimize = { onMinimize?.invoke() }; it.onDrag = onDrag; it.onExpand = onExpand },
             modifier = Modifier.fillMaxWidth().weight(1f)) }
         if (loading) androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
         error?.let { message ->
-            androidx.compose.material3.TextButton({ error = null; loading = true; retryable = true; attempt++ }) {
+            androidx.compose.material3.TextButton({ automaticRetries = 0; expectsPlayback = true; error = null; loading = true; retryable = true; attempt++ }) {
                 Text("$message · Thử lại", color = MaterialTheme.colorScheme.error)
             }
         }

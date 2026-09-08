@@ -127,6 +127,7 @@ fun WatchScreen(vm: VideoViewModel, auth: Authorize, initial: VideoResult, modif
                     FilterChip(rating == "like", { rate("like") }, { Text("Thích") }, enabled = !busy)
                     FilterChip(rating == "dislike", { rate("dislike") }, { Text("Không thích") }, enabled = !busy)
                     FilterChip(library.watchLater.any { it.id == video.id }, { vm.library.toggleLater(video) }, { Text("Xem sau · máy") })
+                    AssistChip({ vm.hideVideo(video) }, { Text("Ẩn video") })
                     AssistChip({ addPlaylist = true }, { Text("Lưu playlist") })
                     AssistChip({ shareVideo(context, video.id) }, { Text("Chia sẻ") })
                     AssistChip({ openExternal(context, "https://www.youtube.com/watch?v=${video.id}") }, { Text("Mở YouTube") })
@@ -178,7 +179,7 @@ fun WatchScreen(vm: VideoViewModel, auth: Authorize, initial: VideoResult, modif
             if (relatedLoading) item { Loading() }
             relatedError?.let { item { MessageCard(it, "Thử lại", { relatedRetry++ }) } }
             if (!relatedLoading && relatedError == null && related.isEmpty()) item { Text("Chưa có video cùng chủ đề.") }
-            items(related, key = { "related_" + it.id }) { v -> VideoCard(v, { open(v) }) { vm.library.toggleLater(v) } }
+            items(related.filterNot { it.id in library.hiddenIds }, key = { "related_" + it.id }) { v -> VideoCard(v, { open(v) }, hide = { vm.hideVideo(v) }) { vm.library.toggleLater(v) } }
             }
         }
     }

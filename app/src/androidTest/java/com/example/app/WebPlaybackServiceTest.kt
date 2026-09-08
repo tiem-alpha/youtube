@@ -60,8 +60,15 @@ class WebPlaybackServiceTest {
                         .putExtra("owner", "first").putExtra("buffering", true))
                 }
                 waitUntil { controller.playbackState?.state == PlaybackState.STATE_BUFFERING }
-                scenario.onActivity { update("second") }
+                scenario.onActivity {
+                    // Disposal can arrive before the replacement player starts loading.
+                    context.startService(Intent(context, WebPlaybackService::class.java).setAction(WebPlaybackService.STOP).putExtra("owner", "first"))
+                    update("second")
+                }
                 waitUntil { controller.metadata?.getString(android.media.MediaMetadata.METADATA_KEY_TITLE) == "second" }
+                Thread.sleep(1000)
+                assertEquals("second", controller.metadata?.getString(android.media.MediaMetadata.METADATA_KEY_TITLE))
+                assertTrue(notifications.activeNotifications.any { it.id == 2002 })
                 context.startService(Intent(context, WebPlaybackService::class.java).setAction(WebPlaybackService.STOP).putExtra("owner", "first"))
                 controller.transportControls.pause()
                 val second = commands.poll(5, TimeUnit.SECONDS)!!

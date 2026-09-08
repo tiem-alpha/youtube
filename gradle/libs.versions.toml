@@ -10,7 +10,7 @@ kotlin = "2.2.10"
 composeBom = "2026.02.01"
 media3 = "1.6.1"
 coroutinesGuava = "1.10.2"
-googlePlayServicesAuth = "21.4.0"
+googlePlayServicesAuth = "21.6.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
