@@ -25,7 +25,7 @@ class DiskCacheTest {
         now += 11 * 60_000L
         assertFalse(cache.read("account:a")!!.fresh)
         now += 24 * 60 * 60_000L
-        assertNull(cache.read("account:a"))
+        assertEquals(page, HomeDiskCache(folder) { now }.read("account:a")!!.page)
     }
 
     @Test fun entriesSurviveRecreationExpireAndCanBeReplaced() {

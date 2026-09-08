@@ -29,7 +29,12 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
     private var tokenExpiresAt = 0L
     var grantedScopes: Set<String> = emptySet(); private set
     val repository = YouTubeDataRepository({ accessToken?.takeIf { System.currentTimeMillis() < tokenExpiresAt } }, { settings.getString("apiKey", null)?.takeIf(String::isNotBlank) ?: BuildConfig.YOUTUBE_API_KEY }, { accessToken = null; tokenExpiresAt = 0 }, publicSource = NewPipePublicSource())
-    private val _account = MutableStateFlow<GoogleProfile?>(null)
+    private val _account = MutableStateFlow<GoogleProfile?>(runCatching {
+        if (!settings.getBoolean("reconnect", false)) null else
+            org.json.JSONObject(settings.getString("accountProfile", "")!!).let {
+                GoogleProfile(it.getString("id"), it.getString("email"), it.getString("name"), it.optString("picture").takeIf(String::isNotBlank))
+            }
+    }.getOrNull())
     val account = _account.asStateFlow()
     private val _youtubeChannel = MutableStateFlow<Channel?>(null)
     val youtubeChannel = _youtubeChannel.asStateFlow()
@@ -41,8 +46,8 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
     private val feedCache = LinkedHashMap<FeedRequest, SearchUiState>()
     private val feedCachedAt = mutableMapOf<FeedRequest, Long>()
     private val diskFeeds = FeedDiskCache(File(application.cacheDir, "feeds"))
-    private val diskHome = HomeDiskCache(File(application.cacheDir, "home"))
-    private var recommendationHistory = LocalLibrary(application, "recommendation_history_guest")
+    private val diskHome = HomeDiskCache(File(application.filesDir, "home"))
+    private var recommendationHistory = LocalLibrary(application, "recommendation_history_${_account.value?.id ?: "guest"}")
     private fun homeOwner() = _account.value?.id?.let { "account:$it" } ?: "guest"
     fun recordVideo(video: VideoResult, seconds: Int? = null) {
         if (recommendationHistory.state.value.history.firstOrNull()?.video?.id != video.id) {
@@ -58,6 +63,8 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
             val history = LocalLibrary(getApplication(), "recommendation_history_$owner")
             if (videoId == null) { history.clearHistory(); history.clearSearches() } else history.removeHistory(videoId)
             diskHome.remove(if (owner == "guest") "guest" else "account:$owner")
+            HomeDiskCache(File(getApplication<Application>().cacheDir, "home"))
+                .remove(if (owner == "guest") "guest" else "account:$owner")
         }
         recommendationHistory = LocalLibrary(getApplication(), "recommendation_history_${_account.value?.id ?: "guest"}")
         if (_state.value.request.kind == FeedKind.Home) feedJob?.cancel()
@@ -92,17 +99,24 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
                 val profile = repository.profile(token)
                 if (generation != sessionGeneration) return@launch
                 accessToken = token; tokenExpiresAt = System.currentTimeMillis() + 50 * 60 * 1000
+                val accountChanged = _account.value?.id != profile.id
                 grantedScopes = scopes; _account.value = profile; _youtubeChannel.value = null
                 recommendationHistory = LocalLibrary(getApplication(), "recommendation_history_${profile.id}")
                 settings.edit().putStringSet("recommendationOwners", settings.getStringSet("recommendationOwners", emptySet()).orEmpty() + profile.id).apply()
                 migrateLegacySearches()
-                resetAccountData()
-                settings.edit().putBoolean("reconnect", true).apply()
-                if (_state.value.request.requiresAccount || _state.value.request.kind == FeedKind.Home) {
+                if (accountChanged) {
+                    resetAccountData()
+                }
+                settings.edit().putBoolean("reconnect", true).putString("accountProfile", org.json.JSONObject()
+                    .put("id", profile.id).put("email", profile.email).put("name", profile.name)
+                    .put("picture", profile.picture.orEmpty()).toString()).apply()
+                if (_state.value.request.requiresAccount || (accountChanged && _state.value.request.kind == FeedKind.Home)) {
                     feedJob?.cancel()
                     _state.value = SearchUiState(request = _state.value.request)
                     load(_state.value.request)
-                } else if (_state.value.videos.isEmpty()) load(_state.value.request)
+                } else if (_state.value.videos.isEmpty()) {
+                    load(_state.value.request)
+                }
                 loadAccountLibrary()
                 onConnected()
                 try {
@@ -118,7 +132,7 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
         sessionGeneration++; accessToken = null; tokenExpiresAt = 0; grantedScopes = emptySet(); _account.value = null; _youtubeChannel.value = null
         resetAccountData()
         recommendationHistory = LocalLibrary(getApplication(), "recommendation_history_guest")
-        settings.edit().putBoolean("reconnect", false).apply()
+        settings.edit().putBoolean("reconnect", false).remove("accountProfile").apply()
         if (_state.value.request.requiresAccount || _state.value.request.kind == FeedKind.Home) {
             feedJob?.cancel()
             _state.value = SearchUiState()
@@ -163,7 +177,7 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
         notify("Đã ẩn video khỏi gợi ý.")
     }
     fun recoverFeed() {
-        if (_state.value.loading) return
+        if (_state.value.loading || (_state.value.request.kind == FeedKind.Home && _state.value.videos.isNotEmpty())) return
         load(_state.value.request, refresh = _state.value.message != null)
     }
     fun notify(message: String?) { _notice.value = message }
@@ -174,17 +188,23 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
         val cached = previous ?: feedCache[request]
         val fresh = System.currentTimeMillis() - (feedCachedAt[request] ?: 0) in 0 until 10 * 60_000L
         _state.value = cached?.copy(loading = true, message = null) ?: SearchUiState(request = request, loading = true)
-        if (!refresh && cached != null && cached.message == null && fresh && !request.liveOnly && !request.requiresAccount) { _state.value = cached.copy(loading = false); return }
+        if (!refresh && cached != null && (request.kind == FeedKind.Home || (cached.message == null && fresh)) && !request.liveOnly && !request.requiresAccount) { _state.value = cached.copy(loading = false); return }
         feedJob = viewModelScope.launch {
             if (request.kind == FeedKind.Home) {
                 // Refresh advances the existing interest sources without rotating topics.
                 if (cached == null && !refresh) {
-                    val saved = withContext(Dispatchers.IO) { diskHome.read(homeOwner()) }
+                    val owner = homeOwner()
+                    val saved = withContext(Dispatchers.IO) {
+                        diskHome.read(owner) ?: HomeDiskCache(File(getApplication<Application>().cacheDir, "home"))
+                            .read(owner)?.also {
+                                diskHome.write(owner, it.page)
+                                HomeDiskCache(File(getApplication<Application>().cacheDir, "home")).remove(owner)
+                            }
+                    }
                     if (saved != null) {
                         _state.value = homeState(request, saved.page)
                         feedCachedAt[request] = saved.savedAt
-                        val lastWatchedAt = recommendationHistory.state.value.history.firstOrNull()?.updatedAt ?: 0L
-                        if (saved.fresh && !saved.page.partial && saved.savedAt >= lastWatchedAt) return@launch
+                        return@launch
                     }
                 }
                 _state.value = _state.value.copy(loading = true)
@@ -269,7 +289,7 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun fetchHome(current: SearchUiState, append: Boolean, refresh: Boolean) {
         val owner = homeOwner()
         var signalsFailed = _account.value != null && !hasSession()
-        if (!append && hasSession() && System.currentTimeMillis() - signalsLoadedAt > 10 * 60_000L) {
+        if (!append && hasSession() && (refresh || System.currentTimeMillis() - signalsLoadedAt > 10 * 60_000L)) {
             try { likedSeeds = repository.feed(FeedRequest(FeedKind.Liked)).items }
             catch (e: CancellationException) { throw e }
             catch (_: Exception) { signalsFailed = true }
@@ -298,6 +318,10 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
         while (page.items.isEmpty() && page.next != null && !page.partial && skipped++ < 3) {
             page = HomeRecommendations.load(page.next!!) { request, token -> repository.feed(request, token) }
         }
+        if (page.items.isEmpty() && page.partial && current.videos.isNotEmpty()) {
+            _state.value = current.copy(loading = false, message = "Chưa tải được gợi ý mới. Đã giữ danh sách hiện tại; hãy thử lại.")
+            return
+        }
         val combined = page.copy(items = ((if (append) current.videos else emptyList()) + page.items).distinctBy { it.id })
         _state.value = homeState(current.request, combined).let {
             if (signalsFailed) it.copy(message = "Chưa tải đủ dữ liệu tài khoản. Hãy thử lại hoặc kết nối lại Google.") else it
@@ -309,8 +333,7 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
         library.search(query)
         if (query.isNotBlank()) {
             recommendationHistory.search(query)
-            feedCache.remove(FeedRequest()); feedCachedAt.remove(FeedRequest())
-            diskHome.remove(homeOwner())
+            // Search signals take effect on the next explicit Home refresh.
         }
         load(FeedRequest(if (query.isBlank()) FeedKind.Home else FeedKind.Search, query.trim(), order = order, duration = duration, liveOnly = live))
     }

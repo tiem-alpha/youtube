@@ -15,7 +15,7 @@ Màn hình xem hiển thị avatar kênh và một bình luận xem trước (t�
 
 Kéo xuống trực tiếp trên vùng video ít nhất 64dp rồi thả để thu nhỏ; trình phát di chuyển theo ngón tay và giữ nguyên phiên phát. Chạm nhanh và kéo tua ngang vẫn chuyển đến trình phát. Có thể kéo thanh tiêu đề hoặc dùng nút thu nhỏ như trước. Nút dấu trang trên thanh video thêm/bỏ video trong hàng đợi **Xem sau** tại Thư viện, kể cả khi thu nhỏ.
 
-Kéo xuống ở đầu danh sách Home để làm mới. App kiểm tra lại danh sách và thử khôi phục Google khi quay lại ứng dụng hoặc mạng được xác nhận có Internet. Danh sách đã tải được giữ trong khi làm mới và khi lỗi mạng; thanh tiến trình cho biết đang tải. Trình phát tải quá lâu có nút thử lại và tự thử lại lỗi kết nối khi mạng trở lại, dùng vị trí đã ghi nhận gần nhất.
+Kéo xuống ở đầu danh sách Home để làm mới. App thử khôi phục Google khi quay lại ứng dụng hoặc mạng được xác nhận có Internet; Home đã lưu được giữ nguyên. Danh sách đã tải được giữ trong khi làm mới và khi lỗi mạng; thanh tiến trình cho biết đang tải. Trình phát tải quá lâu có nút thử lại và tự thử lại lỗi kết nối khi mạng trở lại, dùng vị trí đã ghi nhận gần nhất.
 
 Bản sửa đã build và chạy unit test/lint; thao tác WebView, kéo thu nhỏ, giọng nói, timer khi khóa màn hình và thông báo vẫn cần kiểm thử trên Android thật.
 
@@ -23,8 +23,8 @@ Bản sửa đã build và chạy unit test/lint; thao tác WebView, kéo thu nh
 
 - Danh sách công khai lưu trong cache máy tối đa 4 MB. Dùng lại trong 10 phút; dữ liệu cũ tối đa 24 giờ được hiện trước rồi cập nhật. Khi mất mạng vẫn giữ danh sách đã có. Không lưu cache đĩa cho playlist tài khoản, video đã thích hoặc tìm livestream. Nút **Làm mới** bỏ qua cache để lấy dữ liệu mới.
 - Ảnh có cache RAM 12 MB và cache đĩa 48 MB, hạn lưu 7 ngày. Android có thể tự thu hồi cache khi thiếu dung lượng.
-- Home có cache riêng tối đa 4 MB, khóa theo ID tài khoản hoặc khách; giữ cả con trỏ phân trang từng nguồn. Dùng lại trong 10 phút, hiển thị dữ liệu cũ tối đa 24 giờ trong lúc cập nhật. Đổi tài khoản xóa cache RAM để không hiển thị gợi ý của tài khoản trước. **Làm mới** cập nhật cả tín hiệu tài khoản và danh sách; xóa lịch sử cũng xóa lịch sử gợi ý và cache Home liên quan. Khi chưa có tín hiệu, Home dùng video phổ biến; khi lỗi mạng vẫn giữ danh sách đã tải kèm nút thử lại.
-- Media trực tiếp dùng [Media3 LoadControl](https://developer.android.com/reference/androidx/media3/exoplayer/DefaultLoadControl.Builder): mục tiêu buffer 30–90 giây, bắt đầu sau 1,5 giây, phục hồi sau khi cạn đệm với 5 giây dữ liệu, giữ 15 giây đã phát để tua lại. Ngưỡng dung lượng 64 MB được ưu tiên nên video bitrate cao có thể không đạt đủ 90 giây; đây không phải giới hạn tổng RAM ứng dụng.
+- Home lưu riêng tối đa 4 MB trong dữ liệu app, khóa theo ID tài khoản hoặc khách; giữ cả con trỏ phân trang từng nguồn, không hết hạn theo thời gian. Đổi tài khoản xóa cache RAM để không hiển thị gợi ý của tài khoản trước. **Làm mới** cập nhật cả tín hiệu tài khoản và danh sách; xóa lịch sử cũng xóa lịch sử gợi ý và cache Home liên quan. Khi chưa có tín hiệu, Home dùng video phổ biến; khi lỗi mạng vẫn giữ danh sách đã tải kèm nút thử lại.
+- Media trực tiếp dùng [Media3 LoadControl](https://developer.android.com/reference/androidx/media3/exoplayer/DefaultLoadControl.Builder): mục tiêu buffer 30–90 giây, bắt đầu sau 1,5 giây, phục hồi sau khi cạn đệm với 5 giây dữ liệu, giữ 15 giây đã phát để tua lại. Ưu tiên ngưỡng thời gian để tải trước khi cạn đệm; mức 64 MB không phải giới hạn cứng, video bitrate cao có thể dùng nhiều RAM hơn.
 - Các thông số Media3 không áp dụng cho video nhúng YouTube. Buffer và chất lượng thích ứng của YouTube do trình phát YouTube quản lý. Giữ nguyên player khi thu nhỏ giúp tránh tải lại video, nhưng không bảo đảm loại bỏ giật do mạng hoặc thiết bị.
 
 ## Cập nhật 2026-09-07
@@ -112,3 +112,10 @@ Instrumentation test kiểm tra điều hướng, lưu thư viện bền vững 
 - **MainActivity.kt**: điều hướng và giao diện ứng dụng.
 
 Access token được giữ trong bộ nhớ, không ghi log hoặc SharedPreferences. Cấu hình kết nối bị loại khỏi Android backup; thư viện thiết bị có thể được sao lưu theo Android. Các sửa đổi trên YouTube chỉ thực hiện qua nút người dùng chọn; thao tác xóa playlist có xác nhận trong ứng dụng.
+
+## Cập nhật 2026-09-08
+
+- Lưu danh tính Google (không lưu access token), dùng email đã lưu để khôi phục quyền ngầm. Khi Google thu hồi quyền hoặc yêu cầu xác nhận lại vẫn cần kết nối thủ công. Giữ Home khi nối lại cùng tài khoản.
+- Home lưu trong dữ liệu app, không hết hạn theo thời gian và không tự làm mới khi trở lại app hoặc khi có mạng. Tìm kiếm/lịch sử mới tác động tới lần làm mới tiếp theo. Giới hạn lưu 4 MB; xóa dữ liệu app sẽ xóa danh sách.
+- Media3 ưu tiên buffer theo thời gian; ngưỡng 64 MB không còn là giới hạn cứng, video bitrate cao có thể dùng nhiều RAM hơn. Bỏ chọn video track khi màn hình tắt và chọn lại khi màn hình sáng. Nguồn adaptive có audio riêng có thể ngừng tải video; file/URL gộp audio-video vẫn có thể phải tải dữ liệu chứa cả hai. Chưa đo pin/băng thông trên thiết bị.
+- YouTube vẫn dùng IFrame: thay đổi Media3 không điều khiển buffer hoặc chuyển YouTube sang audio-only. Hai yêu cầu này cho YouTube chưa được triển khai.

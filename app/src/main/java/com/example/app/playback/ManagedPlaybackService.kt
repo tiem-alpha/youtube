@@ -1,5 +1,10 @@
 ﻿package com.example.app.playback
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.IntentFilter
+import android.os.PowerManager
+import androidx.core.content.ContextCompat
 import android.content.Intent
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -17,12 +22,21 @@ class ManagedPlaybackService : MediaSessionService() {
     private var session: MediaSession? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var timerJob: Job? = null
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) { updateVideoTracks() }
+    }
+    private fun updateVideoTracks() {
+        val player = session?.player ?: return
+        val screenOn = getSystemService(PowerManager::class.java).isInteractive
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, !screenOn).build()
+    }
     override fun onCreate() {
         super.onCreate()
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(30_000, 90_000, 1_500, 5_000)
             .setTargetBufferBytes(64 * 1024 * 1024)
-            .setPrioritizeTimeOverSizeThresholds(false)
+            .setPrioritizeTimeOverSizeThresholds(true)
             .setBackBuffer(15_000, true)
             .build()
         val player = ExoPlayer.Builder(this).setLoadControl(loadControl).build().apply {
@@ -32,6 +46,11 @@ class ManagedPlaybackService : MediaSessionService() {
             setHandleAudioBecomingNoisy(true)
         }
         session = MediaSession.Builder(this, player).build()
+        ContextCompat.registerReceiver(this, screenReceiver, IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_SCREEN_ON)
+        }, ContextCompat.RECEIVER_NOT_EXPORTED)
+        updateVideoTracks()
     }
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -53,6 +72,7 @@ class ManagedPlaybackService : MediaSessionService() {
         return super.onStartCommand(intent, flags, startId)
     }
     override fun onDestroy() {
+        unregisterReceiver(screenReceiver)
         scope.cancel(); remainingSeconds.value = 0
         session?.run { player.release(); release() }; session = null
         super.onDestroy()
