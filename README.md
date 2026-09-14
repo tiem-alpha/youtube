@@ -116,6 +116,14 @@ Access token được giữ trong bộ nhớ, không ghi log hoặc SharedPrefer
 ## Cập nhật 2026-09-08
 
 - Lưu danh tính Google (không lưu access token), dùng email đã lưu để khôi phục quyền ngầm. Khi Google thu hồi quyền hoặc yêu cầu xác nhận lại vẫn cần kết nối thủ công. Giữ Home khi nối lại cùng tài khoản.
-- Home lưu trong dữ liệu app, không hết hạn theo thời gian và không tự làm mới khi trở lại app hoặc khi có mạng. Tìm kiếm/lịch sử mới tác động tới lần làm mới tiếp theo. Giới hạn lưu 4 MB; xóa dữ liệu app sẽ xóa danh sách.
+- Home lưu danh sách và vị trí phân trang trong dữ liệu app. Mỗi phiên mở app mới tự tải lượt gợi ý tiếp theo, loại video của lượt trước; chuyển tab trong cùng phiên giữ nguyên danh sách. Khi lỗi mạng, giữ danh sách cũ để có thể thử lại. Giới hạn lưu 4 MB; xóa dữ liệu app sẽ xóa danh sách.
 - Media3 ưu tiên buffer theo thời gian; ngưỡng 64 MB không còn là giới hạn cứng, video bitrate cao có thể dùng nhiều RAM hơn. Bỏ chọn video track khi màn hình tắt và chọn lại khi màn hình sáng. Nguồn adaptive có audio riêng có thể ngừng tải video; file/URL gộp audio-video vẫn có thể phải tải dữ liệu chứa cả hai. Chưa đo pin/băng thông trên thiết bị.
-- YouTube vẫn dùng IFrame: thay đổi Media3 không điều khiển buffer hoặc chuyển YouTube sang audio-only. Hai yêu cầu này cho YouTube chưa được triển khai.
+- Khi mở app, video YouTube dùng IFrame. Xem cập nhật bên dưới cho chế độ âm thanh khi tắt màn hình.
+
+## Cập nhật 2026-09-14
+
+- Hàng đợi chỉ tồn tại trong phiên app, không khôi phục sau khi đóng và mở lại. Đưa app xuống nền hoặc khóa màn hình vẫn giữ hàng đợi để phát tiếp. Nút hàng đợi trên thanh phát và tab Hàng đợi trong Thư viện cho xem thứ tự phát, mở video và xóa từng mục.
+- Service phát nền đánh thức WebView mỗi 15 giây. Nếu thời gian phát không tiến trong 30 giây, thử tải lại video hiện tại ngay trên WebView, tối đa hai lần, không chờ Compose vẽ lại giao diện. Người dùng tạm dừng sẽ không bị tự phát lại.
+- Tắt màn hình: lấy vị trí phát, dỡ trang IFrame để ngừng tải video, lấy luồng audio độc lập bằng NewPipe và phát bằng Media3 trong cùng foreground service. Ưu tiên âm thanh gốc khoảng 128 kbps, không chuyển đổi MP3, không tải file video để lấy tiếng. Chỉ nhận audio dạng progressive HTTP; live/OTF hoặc nội dung không có audio phù hợp sẽ báo lỗi, không chuyển ngầm sang tải video.
+- Mở lại app khi màn hình bật: hủy việc tải audio đang chờ, dừng và giải phóng audio player, tải lại IFrame tại vị trí audio hiện tại (mili giây). Trạng thái tạm dừng, tốc độ, queue, lặp lại và hẹn giờ giữ nguyên; chỉ có một thông báo điều khiển. Chỉ bật màn hình khóa mà chưa mở app vẫn giữ audio.
+- Luồng trực tiếp có thể hết hạn hoặc bị YouTube giới hạn; lỗi phát audio được thử lấy nguồn mới một lần, sau đó hiển thị lỗi. Bấm Phát trên thông báo để thử lại. Kiểm tra nguồn thật: đặt `NEWPIPE_LIVE_TESTS=true` rồi chạy `:app:testDebugUnitTest --tests com.example.app.YouTubeAudioLiveTest`.

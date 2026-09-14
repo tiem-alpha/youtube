@@ -84,6 +84,7 @@ private fun VideoApp(incoming: String?, inPip: Boolean, consumed: () -> Unit, vm
         )) { mutableStateOf<VideoResult?>(null) }
         var playbackQueue by remember { mutableStateOf<List<VideoResult>>(emptyList()) }
         var showSearch by rememberSaveable { mutableStateOf(false) }
+        var showQueue by remember { mutableStateOf(false) }
         var showTimer by remember { mutableStateOf(false) }
         val playbackRate by remember { mutableFloatStateOf(vm.settings.getFloat("playbackRate", 1f)) }
         val loopVideo by remember { mutableStateOf(vm.settings.getBoolean("loopVideo", false)) }
@@ -149,6 +150,12 @@ private fun VideoApp(incoming: String?, inPip: Boolean, consumed: () -> Unit, vm
         val voiceSearch = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             if (result.resultCode == android.app.Activity.RESULT_OK) {
                 result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.takeIf { it.isNotBlank() }?.let(::submitSearch)
+            }
+        }
+        val takeoutPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+            if (uris.isNotEmpty()) {
+                val count = vm.importYouTubeTakeout(uris)
+                vm.notify(if (count > 0) "Đã nhập $count mục lịch sử YouTube." else "Không tìm thấy mục lịch sử trong file đã chọn.")
             }
         }
         BackHandler(route != "home") { back() }
@@ -248,7 +255,8 @@ private fun VideoApp(incoming: String?, inPip: Boolean, consumed: () -> Unit, vm
                     key(selectedId) { WatchScreen(vm, auth, video, modifier, ::openChannel, nextQueued ?: if (index >= 0) playbackQueue.getOrNull(index + 1) else null, ::openVideo) }
                 }
                 "local" -> { LaunchedEffect(Unit) { activeVideo = null }; LocalScreen(vm, modifier) }
-                "settings" -> SettingsScreen(vm, dark, { dark = it; vm.settings.edit().putBoolean("dark", it).apply() }, modifier) { showAccount = true }
+                "settings" -> SettingsScreen(vm, dark, { dark = it; vm.settings.edit().putBoolean("dark", it).apply() }, modifier,
+                    importTakeout = { takeoutPicker.launch(arrayOf("application/json", "text/*")) }) { showAccount = true }
             }
             }
             activeVideo?.let { initial ->
@@ -273,8 +281,9 @@ private fun VideoApp(incoming: String?, inPip: Boolean, consumed: () -> Unit, vm
                             if (expanded && remaining > 0) Text("${remaining / 60}:${(remaining % 60).toString().padStart(2, '0')}", style = MaterialTheme.typography.labelSmall)
                             IconButton({ vm.toggleLater(video) }) {
                                 Icon(if (library.watchLater.any { it.id == video.id }) Icons.Default.Bookmark else Icons.Default.BookmarkAdd,
-                                    if (library.watchLater.any { it.id == video.id }) "Bỏ khỏi xem sau" else "Thêm vào hàng đợi xem sau")
+                                    if (library.watchLater.any { it.id == video.id }) "Xóa khỏi hàng đợi" else "Thêm vào hàng đợi")
                             }
+                            IconButton({ showQueue = true }) { Icon(Icons.Default.QueueMusic, "Hàng đợi (${library.watchLater.size})") }
                             if (expanded) IconButton({ vm.hideVideo(video) }) { Icon(Icons.Default.VisibilityOff, "Ẩn video khỏi gợi ý") }
                             if (expanded) IconButton({ showTimer = true }) { Icon(Icons.Default.Settings, "Cài đặt video") }
                             IconButton({ activeVideo = null; WebPlaybackService.setSleepTimer(context, 0); if (expanded) back() }) { Icon(Icons.Default.Close, "Đóng video") }
@@ -318,6 +327,19 @@ private fun VideoApp(incoming: String?, inPip: Boolean, consumed: () -> Unit, vm
             }
             }
         }
+        if (showQueue) AlertDialog(onDismissRequest = { showQueue = false }, title = { Text("Hàng đợi (${library.watchLater.size})") },
+            text = { LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                item { Text("Phát theo thứ tự bên dưới. Hàng đợi được xóa khi đóng app.") }
+                if (library.watchLater.isEmpty()) item { Text("Hàng đợi trống.") }
+                items(library.watchLater.asReversed(), key = { it.id }) { queued ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton({ openVideo(queued); showQueue = false }, Modifier.weight(1f)) {
+                            Text(queued.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        }
+                        IconButton({ vm.library.removeQueuedVideo(queued.id) }) { Icon(Icons.Default.Delete, "Xóa ${queued.title} khỏi hàng đợi") }
+                    }
+                }
+            } }, confirmButton = { TextButton({ showQueue = false }) { Text("Đóng") } })
         if (showTimer) AlertDialog(onDismissRequest = { showTimer = false }, title = { Text("Hẹn giờ tắt video") },
             text = { Column {
                 Text(if (remaining > 0) "Tự dừng sau ${remaining / 60}:${(remaining % 60).toString().padStart(2, '0')}" else "Chọn thời gian tự dừng video")
@@ -383,7 +405,7 @@ fun VideoCard(video: VideoResult, open: () -> Unit, hide: (() -> Unit)? = null, 
     OutlinedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { Text(message); if (action != null) TextButton(onAction) { Text(action) } } }
 }
 @Composable
-private fun SettingsScreen(vm: VideoViewModel, dark: Boolean, changeDark: (Boolean) -> Unit, modifier: Modifier, account: () -> Unit) {
+private fun SettingsScreen(vm: VideoViewModel, dark: Boolean, changeDark: (Boolean) -> Unit, modifier: Modifier, importTakeout: () -> Unit, account: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var key by remember { mutableStateOf(vm.settings.getString("apiKey", "").orEmpty()) }
     var clear by remember { mutableStateOf(false) }
@@ -396,6 +418,8 @@ private fun SettingsScreen(vm: VideoViewModel, dark: Boolean, changeDark: (Boole
         item { OutlinedTextField(key, { key = it }, Modifier.fillMaxWidth(), label = { Text("YouTube Data API key") }, singleLine = true, visualTransformation = PasswordVisualTransformation()) }
         item { Button({ vm.saveApiKey(key); vm.notify("Đã lưu cấu hình kết nối.") }) { Text("Lưu kết nối") } }
         item { Text("Dữ liệu trên thiết bị", style = MaterialTheme.typography.titleLarge) }
+        item { OutlinedButton(importTakeout, Modifier.fillMaxWidth()) { Text("Nhập lịch sử YouTube (Google Takeout)") } }
+        item { Text("Trong Google Takeout, chọn các file watch-history.json và search-history.json trong mục YouTube và YouTube Music. Sau khi nhập, Home sẽ tạo gợi ý theo các kênh đã xem và từ khóa tìm kiếm.", style = MaterialTheme.typography.bodySmall) }
         item { OutlinedButton({ clear = true }) { Text("Xóa lịch sử, xem sau và playlist trên máy") } }
         item { Text("Ứng dụng không chèn quảng cáo riêng. Video YouTube dùng trình phát của YouTube và có thể chứa quảng cáo. File trên máy và URL media riêng không bị chèn quảng cáo.") }
         item { TextButton({ openExternal(context, "https://www.youtube.com/t/terms") }) { Text("Điều khoản YouTube") } }

@@ -32,12 +32,44 @@ class WebPlaybackBridge(private val context: Context, private val enabled: Boole
     private var closed = false
     private var previousSnapshot = ""
     private var receiver: BroadcastReceiver? = null
+    private var audioActive = false
+    private var stoppedAudio: AudioSnapshot? = null
+    private var restoreAudio: ((AudioSnapshot) -> Unit)? = null
 
-    fun attach(webView: WebView) {
+    fun attach(webView: WebView, onAudioRequested: () -> Unit = {},
+        onAudioState: (AudioSnapshot) -> Unit = {}, onAudioEnded: (AudioSnapshot) -> Unit = {},
+        onAudioReturn: (AudioSnapshot) -> Unit = {}, onScreenOn: () -> Unit = {},
+        onHeartbeat: () -> Unit = {}) {
         if (!enabled) return
+        restoreAudio = onAudioReturn
         receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
                 if (closed || intent.getStringExtra("owner") != owner) return
+                val command = intent.getStringExtra("command")
+                when (command) {
+                    "audioTakeover" -> { if (!audioActive) onAudioRequested(); return }
+                    "screenOn" -> { onScreenOn(); return }
+                    "audioState", "audioEnded", "audioReturn", "audioStopped" -> {
+                        val state = AudioSnapshot(intent.getStringExtra("videoId").orEmpty(), intent.getStringExtra("title").orEmpty(),
+                            intent.getLongExtra("position", 0), intent.getLongExtra("duration", 0),
+                            intent.getBooleanExtra("play", false), intent.getBooleanExtra("buffering", false),
+                            intent.getBooleanExtra("ended", false), intent.getStringExtra("error"))
+                        when (command) {
+                            "audioReturn" -> { audioActive = false; previousSnapshot = ""; onAudioReturn(state) }
+                            "audioStopped" -> { stoppedAudio = state; onAudioState(state) }
+                            "audioEnded" -> if (audioActive) onAudioEnded(state)
+                            else -> if (audioActive) onAudioState(state)
+                        }
+                        return
+                    }
+                }
+                if (command == "serviceStopped") { started = false; previousSnapshot = "" }
+                if (audioActive) return
+                if (intent.getStringExtra("command") == "refresh") {
+                    webView.onResume()
+                    webView.dispatchWindowVisibilityChanged(View.VISIBLE)
+                    onHeartbeat()
+                }
                 val script = when (intent.getStringExtra("command")) {
                     "refresh" -> "if(typeof reportPlayback==='function')reportPlayback();"
                     "play" -> "if(player&&player.playVideo)player.playVideo();"
@@ -56,7 +88,7 @@ class WebPlaybackBridge(private val context: Context, private val enabled: Boole
     }
 
     fun update(state: Int, seconds: Int, title: String, duration: Int = 0, onError: () -> Unit) {
-        if (!enabled || closed) return
+        if (!enabled || closed || audioActive) return
         // Establish the foreground session while loading, before the screen can be locked.
         if (!started && state !in listOf(1, 3)) return
         val snapshot = "$state|$seconds|$title|$duration"
@@ -73,8 +105,37 @@ class WebPlaybackBridge(private val context: Context, private val enabled: Boole
         catch (_: SecurityException) { started = false; onError() }
     }
 
+    fun startAudio(videoId: String, title: String, positionMs: Long, play: Boolean, rate: Float): Boolean {
+        if (!enabled || closed) return false
+        audioActive = true; stoppedAudio = null
+        fun failed(): Boolean {
+            stoppedAudio = AudioSnapshot(videoId, title, positionMs, playWhenReady = false, buffering = false)
+            return false
+        }
+        if (!started) return failed()
+        return try {
+            context.startService(Intent(context, WebPlaybackService::class.java).setAction(WebPlaybackService.AUDIO_START)
+                .putExtra("owner", owner).putExtra("videoId", videoId).putExtra("title", title)
+                .putExtra("position", positionMs).putExtra("play", play).putExtra("rate", rate))
+            true
+        } catch (_: IllegalStateException) { failed() }
+        catch (_: SecurityException) { failed() }
+    }
+
+    fun returnToVideo() {
+        if (!audioActive || closed) return
+        stoppedAudio?.let {
+            stoppedAudio = null; audioActive = false; previousSnapshot = ""
+            restoreAudio?.invoke(it)
+            return
+        }
+        if (started) context.startService(Intent(context, WebPlaybackService::class.java)
+            .setAction(WebPlaybackService.AUDIO_RETURN).putExtra("owner", owner))
+    }
+
     fun close() {
         closed = true
+        restoreAudio = null
         receiver?.let { context.unregisterReceiver(it) }; receiver = null
         if (started) {
             runCatching { context.startService(Intent(context, WebPlaybackService::class.java)

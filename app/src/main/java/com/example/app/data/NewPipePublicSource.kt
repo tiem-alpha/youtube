@@ -53,10 +53,17 @@ class NewPipePublicSource : PublicVideoSource {
     }
 
     // Metadata for pasted links without running the stream/signature extraction pipeline.
-    // Existing playback continues through the app's managed YouTube web player.
+    // Screen-off playback resolves standalone audio separately, only when needed.
     override suspend fun video(id: String): VideoResult =
         feed(FeedRequest(FeedKind.Search, query = id)).items.firstOrNull { it.id == id }
             ?: throw PublicBrowseException("Không tìm thấy video công khai này.")
+
+    suspend fun audio(id: String): ResolvedAudio = extract {
+        require(YouTubeLinks.videoId(id) == id)
+        val extractor = service.getStreamExtractor("https://www.youtube.com/watch?v=$id")
+        extractor.fetchPage()
+        selectAudioStream(extractor.audioStreams)
+    }
 
     private suspend fun <T> extract(params: String? = null, block: () -> T): T = permits.withPermit {
         try {

@@ -41,7 +41,7 @@ fun LibraryScreen(vm: VideoViewModel, auth: Authorize, modifier: Modifier, open:
     }
     Column(modifier) {
         Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("YouTube", "Đã thích", "Lịch sử", "Xem sau", "Playlist trên máy").forEach { FilterChip(section == it, { section = it }, { Text(if (it == "YouTube") "Bộ sưu tập tài khoản" else it) }) }
+            listOf("YouTube", "Đã thích", "Lịch sử", "Hàng đợi", "Playlist trên máy").forEach { FilterChip(section == it, { section = it }, { Text(if (it == "YouTube") "Bộ sưu tập tài khoản" else it) }) }
         }
         if (section == "Đã thích" && account != null) FeedList(
             if (feed.request.kind == FeedKind.Liked) feed else SearchUiState(FeedRequest(FeedKind.Liked), loading = true),
@@ -58,10 +58,10 @@ fun LibraryScreen(vm: VideoViewModel, auth: Authorize, modifier: Modifier, open:
                         Row { TextButton({ open(saved.video) }) { Text("Tiếp tục từ ${formatTime(saved.positionSeconds * 1000L)}") }; TextButton({ vm.removeHistory(saved.video.id) }) { Text("Xóa") } }
                     } }
                 }
-                "Xem sau" -> {
-                    item { Text("Xem sau trên thiết bị", style = MaterialTheme.typography.titleLarge) }
+                "Hàng đợi" -> {
+                    item { Text("Hàng đợi · tự xóa khi đóng app", style = MaterialTheme.typography.titleLarge) }
                     if (library.watchLater.isEmpty()) item { MessageCard("Bấm biểu tượng lưu ở video để thêm vào đây.") }
-                    items(library.watchLater, key = { it.id }) { video -> Column { VideoCard(video, { open(video) }); TextButton({ vm.library.toggleLater(video) }) { Text("Bỏ khỏi xem sau") } } }
+                    items(library.watchLater.asReversed(), key = { it.id }) { video -> Column { VideoCard(video, { open(video) }); TextButton({ vm.library.removeQueuedVideo(video.id) }) { Text("Xóa khỏi hàng đợi") } } }
                 }
                 "Playlist trên máy" -> {
                     item { Button({ create = true }) { Text("Tạo playlist trên máy") } }
@@ -75,7 +75,7 @@ fun LibraryScreen(vm: VideoViewModel, auth: Authorize, modifier: Modifier, open:
                             Text(account!!.email)
                             TextButton({ section = "Đã thích" }) { Text("Video đã thích") }
                             Row { TextButton({ load(false) }, enabled = !loading) { Text("Làm mới") }; TextButton({ create = true }) { Text("Tạo playlist YouTube") } }
-                            Text("Playlist do tài khoản tạo. Lịch sử và Xem sau trong các tab bên cạnh được lưu trên thiết bị.", style = MaterialTheme.typography.bodySmall)
+                            Text("Playlist do tài khoản tạo. Lịch sử được lưu trên thiết bị. Hàng đợi chỉ dùng trong lần mở app này.", style = MaterialTheme.typography.bodySmall)
                             TextButton({ openExternal(context, "https://www.youtube.com/feed/playlists") }) { Text("Xem cả playlist đã lưu trên YouTube") }
                         }
                         items(remote, key = { it.id }) { p -> OutlinedCard(Modifier.fillMaxWidth().clickable { playlist(p.id, p.title, true) }) { Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) { RemoteImage(p.thumbnail, Modifier.size(80.dp, 50.dp)); Column { Text(p.title); Text("${p.count} video") } } } }

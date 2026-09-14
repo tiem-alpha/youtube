@@ -46,9 +46,9 @@ class BackgroundQueueTest {
                 // Deterministic iframe stand-in: exercise native callbacks without YouTube/network.
                 web.loadDataWithBaseURL("https://com.example.app/", """
                     <html><script>
-                    var loaded='',playing=false;
+                    var loaded='',playing=false,playerReady=true,loads=0;
                     var player={playVideo:function(){playing=true;Companion.playback(1,0,100);},pauseVideo:function(){playing=false;Companion.playback(2,0,100);}};
-                    function loadRequestedVideo(id,start){loaded=id;player.playVideo();}
+                    function loadRequestedVideo(id,start){loaded=id;loads++;player.playVideo();}
                     function reportPlayback(){}
                     </script></html>
                 """.trimIndent(), "text/html", "UTF-8", null)
@@ -68,6 +68,14 @@ class BackgroundQueueTest {
             assertEquals("ccccccccccc", notification.extras.getString(android.app.Notification.EXTRA_TITLE))
             notification.actions[0].actionIntent.send()
             Thread.sleep(500)
+            assertEquals("true", script("playing"))
+            // A responsive JS bridge can still report buffering forever with no time progress.
+            // Recovery must load the current queue item without resuming the Activity.
+            script("loads=0;Companion.position(12);Companion.playback(3,12,100);")
+            val deadline = android.os.SystemClock.elapsedRealtime() + 50_000
+            while (script("loads") == "0" && android.os.SystemClock.elapsedRealtime() < deadline) Thread.sleep(500)
+            assertEquals("1", script("loads"))
+            assertEquals("\"ccccccccccc\"", script("loaded"))
             assertEquals("true", script("playing"))
         }
     }

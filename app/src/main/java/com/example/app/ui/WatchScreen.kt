@@ -126,7 +126,7 @@ fun WatchScreen(vm: VideoViewModel, auth: Authorize, initial: VideoResult, modif
                 item { Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(rating == "like", { rate("like") }, { Text("Thích") }, enabled = !busy)
                     FilterChip(rating == "dislike", { rate("dislike") }, { Text("Không thích") }, enabled = !busy)
-                    FilterChip(library.watchLater.any { it.id == video.id }, { vm.library.toggleLater(video) }, { Text("Xem sau · máy") })
+                    FilterChip(library.watchLater.any { it.id == video.id }, { vm.library.toggleLater(video) }, { Text("Hàng đợi") })
                     AssistChip({ vm.hideVideo(video) }, { Text("Ẩn video") })
                     AssistChip({ addPlaylist = true }, { Text("Lưu playlist") })
                     AssistChip({ shareVideo(context, video.id) }, { Text("Chia sẻ") })

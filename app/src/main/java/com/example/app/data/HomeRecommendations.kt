@@ -4,6 +4,7 @@ import com.example.app.domain.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import java.util.Locale
 
 data class HomeSource(val request: FeedRequest, val pageToken: String? = null)
 data class HomeCursor(val sources: List<HomeSource>, val excludedIds: Set<String>)
@@ -50,7 +51,32 @@ object HomeRecommendations {
             catch (e: Exception) { Result.failure<Page<VideoResult>>(e) }
         } }.map { it.await() }
         if (results.all { it.isFailure }) throw results.first().exceptionOrNull()!!
-        val lists = results.map { it.getOrNull()?.items.orEmpty() }
+        fun ranked(items: List<VideoResult>, request: FeedRequest): List<VideoResult> {
+            if (request.kind != FeedKind.Search || request.query.isBlank()) return items
+            val terms = request.query.lowercase(Locale.ROOT).split(Regex("[^\\p{L}\\p{N}]+"))
+                .filter { it.length >= 2 }.distinct()
+            if (terms.isEmpty()) return items
+            val scored = items.mapIndexed { index, video ->
+                val title = video.title.lowercase(Locale.ROOT)
+                val channel = video.channel.lowercase(Locale.ROOT)
+                val description = video.description.lowercase(Locale.ROOT)
+                val score = terms.sumOf { term ->
+                    (if (title.contains(term)) 5 else 0) +
+                        (if (channel.contains(term)) 3 else 0) +
+                        (if (description.contains(term)) 1 else 0)
+                }
+                video to (score * 10_000 - index)
+            }
+            // Search endpoints can append broad “related” results. Keep the
+            // provider's list only when none of the returned titles contain a
+            // query term; otherwise drop zero-match results before mixing feeds.
+            val relevant = scored.filter { it.second >= 10_000 }
+            return (if (relevant.isNotEmpty()) relevant else scored)
+                .sortedByDescending { it.second }.map { it.first }
+        }
+        val lists = results.mapIndexed { index, result ->
+            ranked(result.getOrNull()?.items.orEmpty(), cursor.sources[index].request)
+        }
         val videos = buildList {
             for (index in 0 until (lists.maxOfOrNull { it.size } ?: 0)) {
                 lists.forEach { list -> list.getOrNull(index)?.let { add(it) } }

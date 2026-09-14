@@ -15,16 +15,25 @@ data class LibraryState(val history: List<SavedVideo> = emptyList(), val watchLa
 /** Device library is deliberately separate from YouTube account data. No OAuth tokens are stored here. */
 class LocalLibrary(context: Context, preferencesName: String = "library") {
     private val prefs = context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
-    private val _state = MutableStateFlow(decode(prefs.getString("state", null)))
+    private val _state = MutableStateFlow(decode(prefs.getString("state", null)).copy(watchLater = emptyList()))
     val state = _state.asStateFlow()
-    private fun save(state: LibraryState) { _state.value = state; prefs.edit().putString("state", encode(state)).apply() }
+    private fun save(state: LibraryState) { _state.value = state; prefs.edit().putString("state", encode(state.copy(watchLater = emptyList()))).apply() }
     fun record(video: VideoResult, seconds: Int = _state.value.history.firstOrNull { it.video.id == video.id }?.positionSeconds ?: 0) {
         save(_state.value.copy(history = (listOf(SavedVideo(video, seconds.coerceAtLeast(0))) + _state.value.history.filterNot { it.video.id == video.id }).take(300)))
+    }
+    fun importHistory(entries: List<SavedVideo>) {
+        if (entries.isEmpty()) return
+        save(_state.value.copy(history = (entries + _state.value.history)
+            .filter { it.video.id.isNotBlank() }
+            .distinctBy { it.video.id }
+            .sortedByDescending { it.updatedAt }
+            .take(300)))
     }
     fun toggleLater(video: VideoResult) {
         val old = _state.value.watchLater
         save(_state.value.copy(watchLater = if (old.any { it.id == video.id }) old.filterNot { it.id == video.id } else listOf(video) + old))
     }
+    fun removeQueuedVideo(videoId: String) { save(_state.value.copy(watchLater = _state.value.watchLater.filterNot { it.id == videoId })) }
     fun finishQueuedVideo(videoId: String?): VideoResult? {
         val remaining = remainingWatchQueue(_state.value.watchLater, videoId)
         if (remaining != _state.value.watchLater) save(_state.value.copy(watchLater = remaining))

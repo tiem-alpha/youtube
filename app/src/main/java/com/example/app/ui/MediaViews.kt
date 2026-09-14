@@ -112,7 +112,11 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
     var loadedId by remember { mutableStateOf(videoId) }
     var loadedTitle by remember { mutableStateOf(title) }
     val currentLoop by rememberUpdatedState(loop)
+    val currentRate by rememberUpdatedState(playbackRate)
+    var audioMode by remember { mutableStateOf(false) }
     var lastHeartbeat by remember { mutableLongStateOf(android.os.SystemClock.elapsedRealtime()) }
+    var lastProgressAt by remember { mutableLongStateOf(android.os.SystemClock.elapsedRealtime()) }
+    var lastPosition by remember { mutableIntStateOf(-1) }
     var expectsPlayback by remember { mutableStateOf(true) }
     var playerState by remember { mutableIntStateOf(-1) }
     var automaticRetries by remember { mutableIntStateOf(0) }
@@ -146,14 +150,15 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
             gestureGuard.install(this)
             addJavascriptInterface(object {
-                @JavascriptInterface fun position(seconds: Int) { post { if (!disposed) { resumeSeconds = seconds.coerceAtLeast(0); progress(resumeSeconds) } } }
-                @JavascriptInterface fun finished() { post { if (!disposed) {
+                @JavascriptInterface fun position(seconds: Int) { post { if (!disposed && !audioMode) { resumeSeconds = seconds.coerceAtLeast(0); progress(resumeSeconds) } } }
+                @JavascriptInterface fun finished() { post { if (!disposed && !audioMode) {
                     if (currentLoop) evaluateJavascript("player.seekTo(0,true);player.playVideo();", null) else {
                         ended()
                         next()?.let { target ->
                             YouTubeLinks.videoId(target.first)?.let { id ->
                                 loadedId = id; loadedTitle = target.second
                                 resumeSeconds = 0; automaticRetries = 0; error = null; retryable = true; expectsPlayback = true
+                                lastProgressAt = android.os.SystemClock.elapsedRealtime(); lastPosition = -1
                                 loading = true; buffering = true
                                 bridge.update(3, 0, loadedTitle) {}
                                 onResume()
@@ -163,7 +168,12 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
                     }
                 } } }
                 @JavascriptInterface fun playback(state: Int, seconds: Int, duration: Int) { post {
-                    if (disposed) return@post
+                    if (disposed || audioMode) return@post
+                    if (seconds != lastPosition || state !in listOf(-1, 1, 3)) {
+                        lastProgressAt = android.os.SystemClock.elapsedRealtime()
+                        if (seconds > lastPosition && state == 1) automaticRetries = 0
+                        lastPosition = seconds
+                    }
                     playerState = state
                     lastHeartbeat = android.os.SystemClock.elapsedRealtime()
                     expectsPlayback = state in listOf(-1, 1, 3)
@@ -173,7 +183,7 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
                     if (state == 3) retryable = true
                     bridge.update(state, seconds, loadedTitle, duration) { error = "Không khởi động được phát nền. Mở lại màn hình video rồi bấm Phát." }
                 } }
-                @JavascriptInterface fun failed(code: Int) { post { if (disposed) return@post; expectsPlayback = false; loading = false; retryable = code == 5; error = when (code) {
+                @JavascriptInterface fun failed(code: Int) { post { if (disposed || audioMode) return@post; expectsPlayback = false; loading = false; retryable = code == 5; error = when (code) {
                     101, 150 -> "Chủ sở hữu không cho phép phát nhúng. Bạn có thể mở video trên YouTube."
                     100 -> "Video không tồn tại hoặc ở chế độ riêng tư."
                     else -> "YouTube không phát được video (mã $code). Thử lại hoặc mở trên YouTube."
@@ -187,7 +197,7 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
                 }
                 override fun onReceivedError(view: WebView, request: WebResourceRequest, webError: WebResourceError) {
                     if (request.isForMainFrame) {
-                        if (disposed) return
+                        if (disposed || audioMode) return
                         loading = false; retryable = true
                         error = "Không tải được trình phát. Kiểm tra mạng và thử lại."
                     }
@@ -201,7 +211,7 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
                     // Restore only playback that was active before this fullscreen transition.
                     val restore = {
                         post {
-                            if (!disposed) evaluateJavascript("if(player&&player.playVideo)player.playVideo();", null)
+                            if (!disposed && !audioMode) evaluateJavascript("if(player&&player.playVideo)player.playVideo();", null)
                         }
                         Unit
                     }
@@ -218,25 +228,13 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
                 }
                 override fun onHideCustomView() { exitFullscreen() }
             }
-            val id = YouTubeLinks.videoId(videoId)
-            if (id != null) {
-                val origin = "https://${context.packageName}"
-                loadDataWithBaseURL(origin + "/", """
-                    <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="strict-origin-when-cross-origin">
-                    <style>html,body{margin:0;padding:0;width:100%;height:100vh;background:#000;overflow:hidden}#player{position:fixed;inset:0;display:block;width:100%;height:100%;border:0}</style></head>
-                    <body><div id="player"></div><script src="https://www.youtube.com/iframe_api"></script><script>
-                    var requestedVideo='$id', requestedStart=${resumeSeconds.coerceAtLeast(0)}, playerReady=false;
-                    function loadRequestedVideo(id,start){requestedVideo=id;requestedStart=start;if(playerReady)player.loadVideoById(id,start);}
-                    var player; function reportPlayback(){if(player&&player.getPlayerState&&player.getCurrentTime)Companion.playback(player.getPlayerState(),Math.floor(player.getCurrentTime()),Math.floor(player.getDuration()||0));}
-                    function onYouTubeIframeAPIReady(){player=new YT.Player('player',{width:'100%',height:'100%',videoId:requestedVideo,playerVars:{controls:1,fs:1,playsinline:1,autoplay:1,start:${resumeSeconds.coerceAtLeast(0)},origin:'$origin'},events:{
-                    onReady:function(e){playerReady=true;e.target.loadVideoById(requestedVideo,requestedStart);e.target.setPlaybackRate($playbackRate);e.target.playVideo();},onStateChange:function(e){reportPlayback();if(e.data===0)Companion.finished();},onError:function(e){Companion.playback(2,0,0);Companion.failed(e.data);}}});}
-                    setInterval(function(){reportPlayback();if(player&&player.getPlayerState&&player.getPlayerState()===1)Companion.position(Math.floor(player.getCurrentTime()));},5000);
-                    </script></body></html>
-                """.trimIndent(), "text/html", "UTF-8", null)
+            YouTubeLinks.videoId(loadedId)?.let { id ->
+                loadYouTubeDocument(id, resumeSeconds * 1000L, playbackRate, expectsPlayback)
             }
         }
     }
-    LaunchedEffect(webView, videoId, title) {
+    LaunchedEffect(webView, videoId, title, audioMode) {
+        if (audioMode) return@LaunchedEffect
         if (loadedId != videoId) {
             YouTubeLinks.videoId(videoId)?.let { id ->
                 loadedId = id; loadedTitle = title
@@ -247,11 +245,12 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
         } else loadedTitle = title
     }
     LaunchedEffect(recovery) {
-        if (recovery > 0 && retryable && (error != null || buffering)) {
+        if (!audioMode && recovery > 0 && retryable && (error != null || buffering)) {
             automaticRetries = 0; error = null; loading = true; buffering = false; attempt++
         }
     }
     LaunchedEffect(webView, playbackRate) {
+        if (audioMode) return@LaunchedEffect
         webView.evaluateJavascript("if(player&&player.setPlaybackRate)player.setPlaybackRate($playbackRate);", null)
     }
     LaunchedEffect(webView, loading) {
@@ -259,6 +258,8 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
         while (true) {
             kotlinx.coroutines.delay(2_000)
             val now = android.os.SystemClock.elapsedRealtime()
+            if (audioMode) continue
+            if (!owner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) && backgroundPlayback) continue
             if ((loading && now - since >= 20_000) || (expectsPlayback && now - lastHeartbeat >= 20_000)) {
                 if (automaticRetries < 2 && (retryable || expectsPlayback)) {
                     automaticRetries++; error = null; loading = true; buffering = false
@@ -273,14 +274,105 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
     }
     BackHandler(fullscreen != null) { exitFullscreen() }
     DisposableEffect(webView, owner) {
-        bridge.attach(webView)
+        fun screenInteractive() = context.getSystemService(android.os.PowerManager::class.java).isInteractive
+        fun restoreVideo(state: com.example.app.playback.AudioSnapshot) {
+            if (webView.disposed) return
+            loadedId = state.videoId; loadedTitle = state.title
+            resumeSeconds = (state.positionMs / 1000).toInt()
+            progress(resumeSeconds)
+            audioMode = false; automaticRetries = 0; error = null
+            expectsPlayback = state.playWhenReady && !state.ended
+            loading = expectsPlayback; buffering = false; retryable = true
+            lastHeartbeat = android.os.SystemClock.elapsedRealtime(); lastProgressAt = lastHeartbeat
+            webView.onResume(); webView.dispatchWindowVisibilityChanged(View.VISIBLE)
+            webView.loadYouTubeDocument(state.videoId, state.positionMs, currentRate, expectsPlayback)
+            bridge.update(if (expectsPlayback) 3 else 2, resumeSeconds, loadedTitle) {}
+        }
+        fun requestAudio() {
+            if (audioMode || webView.disposed || screenInteractive()) return
+            audioMode = true
+            exitFullscreen(resumePlayback = false)
+            // Read the actual clock before unloading the iframe. Pausing alone can leave it buffering video.
+            var capturedOnce = false
+            fun completeCapture(raw: String?) {
+                if (capturedOnce || webView.disposed || !audioMode) return
+                capturedOnce = true
+                if (screenInteractive() && owner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                    audioMode = false
+                    return
+                }
+                val captured = runCatching { org.json.JSONObject(raw ?: "{}") }.getOrNull()
+                val positionMs = (if (captured?.isNull("position") == false) captured.optLong("position") else resumeSeconds * 1000L).coerceAtLeast(0)
+                val state = if (captured?.isNull("state") == false) captured.optInt("state") else playerState
+                val play = state in listOf(-1, 1, 3)
+                resumeSeconds = (positionMs / 1000).toInt(); progress(resumeSeconds)
+                webView.stopLoading()
+                webView.loadDataWithBaseURL(null, "<html><body style='background:black'></body></html>", "text/html", "UTF-8", null)
+                webView.onPause()
+                if (!bridge.startAudio(loadedId, loadedTitle, positionMs, play, currentRate)) {
+                    expectsPlayback = false; loading = false; buffering = false
+                    error = "Không khởi động được âm thanh nền. Mở app rồi thử lại."
+                }
+            }
+            webView.evaluateJavascript("""
+                (function(){return {position:typeof player!=='undefined'&&player&&player.getCurrentTime?Math.round(player.getCurrentTime()*1000):null,
+                state:typeof player!=='undefined'&&player&&player.getPlayerState?player.getPlayerState():null};})()
+            """.trimIndent(), ::completeCapture)
+            // A stalled renderer must not block the switch; use the most recent native clock.
+            webView.postDelayed({ completeCapture(null) }, 1000)
+        }
+        // Service callbacks run without a Compose frame, including while the Activity is stopped.
+        // Replacing the WebView through recomposition can otherwise wait until the app opens.
+        bridge.attach(webView, onAudioRequested = ::requestAudio,
+            onAudioState = { state ->
+                if (audioMode && state.videoId == loadedId) {
+                    resumeSeconds = (state.positionMs / 1000).toInt(); progress(resumeSeconds)
+                    expectsPlayback = state.playWhenReady && !state.ended && state.error == null
+                    loading = state.buffering && expectsPlayback; buffering = loading
+                    error = state.error; retryable = state.error != null
+                    playerState = when { state.ended -> 0; loading -> 3; expectsPlayback -> 1; else -> 2 }
+                    lastHeartbeat = android.os.SystemClock.elapsedRealtime()
+                }
+            }, onAudioEnded = { state ->
+                if (audioMode && state.videoId == loadedId) {
+                    val target = if (currentLoop) loadedId to loadedTitle else { ended(); next() }
+                    target?.let { (id, name) ->
+                        if (YouTubeLinks.videoId(id) != null) {
+                            loadedId = id; loadedTitle = name; resumeSeconds = 0
+                            bridge.startAudio(id, name, 0, true, currentRate)
+                        }
+                    }
+                }
+            }, onAudioReturn = ::restoreVideo, onScreenOn = {
+                if (screenInteractive() && owner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) bridge.returnToVideo()
+            }) {
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (!audioMode && expectsPlayback && now - lastProgressAt >= 30_000 &&
+                !owner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                lastProgressAt = now
+                if (automaticRetries < 2) {
+                    automaticRetries++
+                    val id = YouTubeLinks.videoId(loadedId)
+                    if (id != null) webView.evaluateJavascript(
+                        "if(playerReady){loadRequestedVideo('$id',${resumeSeconds.coerceAtLeast(0)});player.playVideo();}", null)
+                } else {
+                    expectsPlayback = false; loading = false; retryable = true
+                    error = "Tải video quá lâu. Kiểm tra mạng rồi thử lại."
+                    webView.evaluateJavascript("if(player&&player.pauseVideo)player.pauseVideo();", null)
+                    bridge.update(2, resumeSeconds, loadedTitle) {}
+                }
+            }
+        }
         lastHeartbeat = android.os.SystemClock.elapsedRealtime()
         bridge.update(3, resumeSeconds, loadedTitle) { error = "Không khởi động được phát nền. Bấm Thử lại khi mở ứng dụng." }
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_PAUSE && !backgroundPlayback) { webView.evaluateJavascript("if(player&&player.pauseVideo)player.pauseVideo();", null); webView.onPause() }
             if (event == Lifecycle.Event.ON_RESUME) {
-                webView.onResume()
-                webView.evaluateJavascript("reportPlayback();", null)
+                if (audioMode && screenInteractive()) bridge.returnToVideo()
+                else if (!audioMode) {
+                    webView.onResume()
+                    webView.evaluateJavascript("if(typeof reportPlayback==='function')reportPlayback();", null)
+                }
             }
         }
         owner.lifecycle.addObserver(observer)

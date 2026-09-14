@@ -15,6 +15,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import android.net.Uri
+import org.json.JSONArray
+import java.time.Instant
 
 data class SearchUiState(val request: FeedRequest = FeedRequest(), val videos: List<VideoResult> = emptyList(), val loading: Boolean = false, val message: String? = null, val nextToken: String? = null,
     val homeCursor: HomeCursor? = null, val heading: String = "Gợi ý cho bạn", val explanation: String? = null)
@@ -72,6 +75,45 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
         if (_state.value.request.kind == FeedKind.Home) _state.value = SearchUiState()
     }
     fun clearLocalData() { removeHistory(); library.clear() }
+    fun importYouTubeTakeout(uris: List<Uri>): Int {
+        var importedVideos = 0
+        val importedSearches = mutableListOf<String>()
+        val importedHistory = mutableListOf<SavedVideo>()
+        uris.forEach { uri ->
+            runCatching {
+                val raw = getApplication<Application>().contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } ?: return@runCatching
+                val root = JSONArray(raw)
+                for (index in 0 until root.length()) {
+                    val item = root.optJSONObject(index) ?: continue
+                    val title = item.optString("title").trim()
+                    val time = item.optString("time").let { runCatching { Instant.parse(it).toEpochMilli() }.getOrDefault(System.currentTimeMillis()) }
+                    when {
+                        title.startsWith("Searched for ", ignoreCase = true) -> title.substringAfter("Searched for ").trim().takeIf { it.isNotBlank() }?.let(importedSearches::add)
+                        title.startsWith("Watched ", ignoreCase = true) -> {
+                            val id = YouTubeLinks.videoId(item.optString("titleUrl"))
+                            if (id != null) {
+                                val subtitle = item.optJSONArray("subtitles")?.optJSONObject(0)
+                                val channel = subtitle?.optString("name").orEmpty().ifBlank { "YouTube" }
+                                val channelId = Regex("/channel/([A-Za-z0-9_-]+)").find(subtitle?.optString("url").orEmpty())?.groupValues?.get(1).orEmpty()
+                                importedHistory += SavedVideo(VideoResult(id, title.substring(8).trim().ifBlank { "Video YouTube" }, channel, "https://i.ytimg.com/vi/$id/hqdefault.jpg", channelId = channelId), updatedAt = time)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        library.importHistory(importedHistory)
+        recommendationHistory.importHistory(importedHistory)
+        if (importedSearches.isNotEmpty()) {
+            library.importSearches(importedSearches)
+            recommendationHistory.importSearches(importedSearches)
+        }
+        if (importedHistory.isNotEmpty() || importedSearches.isNotEmpty()) {
+            feedCache.remove(FeedRequest()); feedCachedAt.remove(FeedRequest()); diskHome.remove(homeOwner())
+            if (_state.value.request.kind == FeedKind.Home) load(FeedRequest(), refresh = true)
+        }
+        return importedHistory.size + importedSearches.size
+    }
     private var sessionGeneration = 0
     private var accountDataGeneration = 0
     private var libraryJob: Job? = null
@@ -166,7 +208,7 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun toggleLater(video: VideoResult) {
         library.toggleLater(video)
-        notify(if (library.state.value.watchLater.any { it.id == video.id }) "Đã thêm vào hàng đợi xem sau trong Thư viện." else "Đã bỏ khỏi xem sau.")
+        notify(if (library.state.value.watchLater.any { it.id == video.id }) "Đã thêm vào hàng đợi trong Thư viện." else "Đã xóa khỏi hàng đợi.")
     }
     fun hideVideo(video: VideoResult) {
         library.hide(video.id)
@@ -204,6 +246,8 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
                     if (saved != null) {
                         _state.value = homeState(request, saved.page)
                         feedCachedAt[request] = saved.savedAt
+                        _state.value = _state.value.copy(loading = true)
+                        fetch(false, refreshHome = true)
                         return@launch
                     }
                 }
@@ -317,6 +361,13 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
         var skipped = 0
         while (page.items.isEmpty() && page.next != null && !page.partial && skipped++ < 3) {
             page = HomeRecommendations.load(page.next!!) { request, token -> repository.feed(request, token) }
+        }
+        // A personalized source may contain only videos already watched or
+        // hidden. Keep Home useful by falling back to the public popular feed.
+        if (page.items.isEmpty() && !page.partial) {
+            val fallback = HomeCursor(listOf(HomeSource(FeedRequest())),
+                history.map { it.video.id }.toSet() + library.state.value.hiddenIds + current.videos.map { it.id })
+            page = HomeRecommendations.load(fallback) { request, token -> repository.feed(request, token) }
         }
         if (page.items.isEmpty() && page.partial && current.videos.isNotEmpty()) {
             _state.value = current.copy(loading = false, message = "Chưa tải được gợi ý mới. Đã giữ danh sách hiện tại; hãy thử lại.")
