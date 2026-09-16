@@ -26,13 +26,17 @@ object HomeRecommendations {
             .distinctBy { it.lowercase(java.util.Locale.ROOT) }.take(3)
             .map { FeedRequest(FeedKind.Search, query = it) }
         val channelRanks = ranked { it.channelId }
-        val recentChannels = (recent.take(1).map { it.video.channelId } + channelRanks)
-            .filter(String::isNotBlank).distinct().take(2)
+        val categoryChannels = seeds.filter { it.categoryId.isNotBlank() && it.channelId.isNotBlank() }
+            .distinctBy { it.categoryId }.map { it.channelId }
+        val recentChannels = (recent.take(1).map { it.video.channelId } + categoryChannels + channelRanks)
+            .filter(String::isNotBlank).distinct()
         val subscribed = subscriptions.map { it.id }.filter(String::isNotBlank).distinct()
             .sortedWith(compareBy<String> { channelRanks.indexOf(it).takeIf { rank -> rank >= 0 } ?: Int.MAX_VALUE }
                 .thenBy { it }).take(2)
         val preferred = subscribed.filter { it in channelRanks }
-        val channelIds = (preferred + recentChannels + subscribed).distinct().take(3)
+        val channelSlots = 6 - topics.size
+        val watchedSlots = (channelSlots - subscribed.filterNot { it in recentChannels }.size).coerceAtLeast(1)
+        val channelIds = (recentChannels.take(watchedSlots) + subscribed + recentChannels).distinct().take(channelSlots)
         fun channel(id: String) = FeedRequest(FeedKind.Channel, resourceId = id)
         // Explicit searches have reserved slots, ahead of unwatched subscriptions.
         val sources = (preferred.map(::channel) + topics + channelIds.filterNot { it in preferred }.map(::channel))
@@ -76,6 +80,7 @@ object HomeRecommendations {
         }
         val lists = results.mapIndexed { index, result ->
             ranked(result.getOrNull()?.items.orEmpty(), cursor.sources[index].request)
+                .distinctBy { it.id }.filter { eligible(it) && it.id !in cursor.excludedIds }
         }
         val videos = buildList {
             for (index in 0 until (lists.maxOfOrNull { it.size } ?: 0)) {

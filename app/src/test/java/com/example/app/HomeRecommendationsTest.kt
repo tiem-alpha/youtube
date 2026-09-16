@@ -69,7 +69,7 @@ class HomeRecommendationsTest {
             if (request.kind == FeedKind.Home) Page(listOf(video("watched"), video("a"), video("shared")), "music-next")
             else Page(listOf(video("b"), video("shared")))
         }
-        assertEquals(listOf("b", "a", "shared"), page.items.map { it.id })
+        assertEquals(listOf("a", "b", "shared"), page.items.map { it.id })
         assertEquals("music-next", page.next!!.sources.single().pageToken)
         val last = HomeRecommendations.load(page.next!!) { _, token ->
             assertEquals("music-next", token)
@@ -152,6 +152,24 @@ class HomeRecommendationsTest {
         val restored = LocalLibrary.decode(LocalLibrary.encode(LibraryState(watchLater = listOf(video("s").copy(isShort = true)))))
         assertTrue(restored.watchLater.single().isShort)
         assertFalse(HomeRecommendations.eligible(restored.watchLater.single()))
+    }
+
+    @Test fun olderInterestsSurviveADominantRecentTopic() {
+        val history = (1..20).map { SavedVideo(video("new$it", "27", "learning$it"), updatedAt = 100L + it) } +
+            listOf(SavedVideo(video("music", "10", "music-channel"), updatedAt = 2),
+                SavedVideo(video("game", "20", "game-channel"), updatedAt = 1))
+        val channels = HomeRecommendations.plan(history, emptyList(), emptyList()).sources.map { it.request.resourceId }
+        assertTrue(channels.containsAll(listOf("learning20", "music-channel", "game-channel")))
+        assertTrue(channels.size <= 6)
+    }
+
+    @Test fun watchedPrefixDoesNotLetOneSourceDominateTheMix() = runBlocking {
+        val sources = listOf("music", "learning").map { HomeSource(FeedRequest(FeedKind.Channel, resourceId = it)) }
+        val page = HomeRecommendations.load(HomeCursor(sources, (1..10).map { "seen$it" }.toSet())) { request, _ ->
+            if (request.resourceId == "music") Page((1..10).map { video("seen$it") } + video("music-new"))
+            else Page((1..10).map { video("learning$it") })
+        }
+        assertEquals(listOf("music-new", "learning1"), page.items.take(2).map { it.id })
     }
 
     @Test fun allFailedSourcesReportFailure() = runBlocking {

@@ -52,6 +52,16 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
     private val diskHome = HomeDiskCache(File(application.filesDir, "home"))
     private var recommendationHistory = LocalLibrary(application, "recommendation_history_${_account.value?.id ?: "guest"}")
     private fun homeOwner() = _account.value?.id?.let { "account:$it" } ?: "guest"
+    suspend fun suggestedVideos(video: VideoResult): List<VideoResult> {
+        val signals = recommendationHistory.state.value
+        val plan = HomeRecommendations.plan(signals.history, likedSeeds, subscriptionSeeds, signals.searches)
+        val current = HomeSource(FeedRequest(FeedKind.Search, query = video.title.take(100)))
+        val sources = (listOf(current) + plan.sources.filterNot { it.request.kind == FeedKind.Home }).distinct()
+        return HomeRecommendations.load(plan.copy(sources = sources,
+            excludedIds = plan.excludedIds + video.id + library.state.value.hiddenIds)) { request, token ->
+            repository.feed(request, token)
+        }.items
+    }
     fun recordVideo(video: VideoResult, seconds: Int? = null) {
         if (recommendationHistory.state.value.history.firstOrNull()?.video?.id != video.id) {
             feedCachedAt.remove(FeedRequest())
@@ -352,7 +362,6 @@ class VideoViewModel(application: Application) : AndroidViewModel(application) {
         }
         val history = recommendationHistory.state.value.history
         val base = if (append) current.homeCursor ?: return
-            else if (refresh) current.homeCursor ?: HomeRecommendations.plan(history, likedSeeds, subscriptionSeeds, recommendationHistory.state.value.searches)
             else HomeRecommendations.plan(history, likedSeeds, subscriptionSeeds, recommendationHistory.state.value.searches)
         val cursor = base.copy(excludedIds = base.excludedIds + history.map { it.video.id } + library.state.value.hiddenIds +
             (if (refresh) current.videos.map { it.id } else emptyList()))

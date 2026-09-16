@@ -6,6 +6,7 @@ import android.app.Dialog
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.view.View
@@ -27,6 +28,10 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
@@ -93,6 +98,36 @@ fun RemoteImage(url: String?, modifier: Modifier = Modifier) {
 }
 
 fun Context.activity(): Activity? = when (this) { is Activity -> this; is ContextWrapper -> baseContext.activity(); else -> null }
+internal fun playerVideoId(url: String): String? {
+    YouTubeLinks.videoId(url)?.let { return it }
+    if (url.startsWith("vnd.youtube:")) {
+        return YouTubeLinks.videoId(url.removePrefix("vnd.youtube:").removePrefix("//").substringBefore('?'))
+    }
+    if (url.startsWith("intent:")) {
+        val intent = runCatching { Intent.parseUri(url, Intent.URI_INTENT_SCHEME) }.getOrNull() ?: return null
+        intent.getStringExtra("browser_fallback_url")?.let { YouTubeLinks.videoId(it)?.let { id -> return id } }
+        return intent.data?.let { YouTubeLinks.videoId(it.toString().replaceFirst("intent:", "https:")) }
+    }
+    return null
+}
+
+private fun Dialog.makePlayerFullscreen() {
+    window?.let { window ->
+        window.setBackgroundDrawableResource(android.R.color.black)
+        window.decorView.setPadding(0, 0, 0, 0)
+        window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        if (android.os.Build.VERSION.SDK_INT >= 28) {
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+}
 fun openExternal(context: Context, url: String) {
     runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
         .onFailure { android.widget.Toast.makeText(context, "Không tìm thấy ứng dụng để mở liên kết.", android.widget.Toast.LENGTH_SHORT).show() }
@@ -103,12 +138,14 @@ fun shareVideo(context: Context, id: String) {
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modifier, onProgress: (Int) -> Unit = {}, onEnded: () -> Unit = {}, backgroundPlayback: Boolean = false, title: String = "Video YouTube", onMinimize: (() -> Unit)? = null, onDrag: (Float) -> Unit = {}, onExpand: (() -> Unit)? = null, playbackRate: Float = 1f, loop: Boolean = false, nextVideo: () -> Pair<String, String>? = { null }) {
+fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modifier, onProgress: (Int) -> Unit = {}, onEnded: () -> Unit = {}, backgroundPlayback: Boolean = false, title: String = "Video YouTube", onMinimize: (() -> Unit)? = null, onDrag: (Float) -> Unit = {}, onExpand: (() -> Unit)? = null, playbackRate: Float = 1f, loop: Boolean = false, nextVideo: () -> Pair<String, String>? = { null }, onOpenVideo: (String) -> Unit = {}) {
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
     val progress by rememberUpdatedState(onProgress)
     val ended by rememberUpdatedState(onEnded)
     val next by rememberUpdatedState(nextVideo)
+    val openVideo by rememberUpdatedState(onOpenVideo)
+    val orientation = LocalConfiguration.current.orientation
     var loadedId by remember { mutableStateOf(videoId) }
     var loadedTitle by remember { mutableStateOf(title) }
     val currentLoop by rememberUpdatedState(loop)
@@ -129,11 +166,14 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
     val bridge = remember(backgroundPlayback, attempt) { WebPlaybackBridge(context, backgroundPlayback) }
     var error by remember { mutableStateOf<String?>(null) }
     var fullscreen by remember { mutableStateOf<Dialog?>(null) }
+    var previousOrientation by remember { mutableStateOf<Int?>(null) }
     var customCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
     var restoreFullscreenPlayback by remember { mutableStateOf<(() -> Unit)?>(null) }
     fun exitFullscreen(resumePlayback: Boolean = true) {
         val restore = restoreFullscreenPlayback.takeIf { resumePlayback && playerState in listOf(1, 3) }
         fullscreen?.dismiss(); fullscreen = null
+        previousOrientation?.let { context.activity()?.requestedOrientation = it }
+        previousOrientation = null
         customCallback?.onCustomViewHidden(); customCallback = null
         restoreFullscreenPlayback = null
         restore?.invoke()
@@ -146,10 +186,15 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
             setBackgroundColor(android.graphics.Color.BLACK)
             settings.javaScriptEnabled = true; settings.domStorageEnabled = true
             settings.mediaPlaybackRequiresUserGesture = false
+            settings.setSupportMultipleWindows(true)
             settings.allowFileAccess = false; settings.allowContentAccess = false
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
             gestureGuard.install(this)
+            installPlayerVideoNavigation(this) { id -> if (!disposed) openVideo(id) }
             addJavascriptInterface(object {
+                @JavascriptInterface fun selectedVideo(id: String) { post {
+                    if (!disposed && !audioMode && id != loadedId && YouTubeLinks.videoId(id) == id) openVideo(id)
+                } }
                 @JavascriptInterface fun position(seconds: Int) { post { if (!disposed && !audioMode) { resumeSeconds = seconds.coerceAtLeast(0); progress(resumeSeconds) } } }
                 @JavascriptInterface fun finished() { post { if (!disposed && !audioMode) {
                     if (currentLoop) evaluateJavascript("player.seekTo(0,true);player.playVideo();", null) else {
@@ -191,6 +236,11 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
             }, "Companion")
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                    val id = playerVideoId(request.url.toString())
+                    if (id != null && (request.isForMainFrame || request.hasGesture())) {
+                        openVideo(id)
+                        return true
+                    }
                     if (!request.isForMainFrame) return false
                     if (request.url.scheme == "https") openExternal(context, request.url.toString())
                     return true
@@ -204,6 +254,20 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
                 }
             }
             webChromeClient = object : WebChromeClient() {
+                override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: android.os.Message): Boolean {
+                    if (!isUserGesture) return false
+                    val popup = WebView(context)
+                    popup.webViewClient = object : WebViewClient() {
+                        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                            playerVideoId(request.url.toString())?.let { openVideo(it) }
+                            view.post { view.destroy() }
+                            return true
+                        }
+                    }
+                    (resultMsg.obj as WebView.WebViewTransport).webView = popup
+                    resultMsg.sendToTarget()
+                    return true
+                }
                 override fun onShowCustomView(view: View, callback: CustomViewCallback) {
                     if (fullscreen != null) { callback.onCustomViewHidden(); return }
                     val wasPlaying = playerState in listOf(1, 3)
@@ -217,12 +281,17 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
                     }
                     restoreFullscreenPlayback = restore
                     customCallback = callback
+                    context.activity()?.let {
+                        previousOrientation = it.requestedOrientation
+                        it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+                    }
                     fullscreen = Dialog(context, android.R.style.Theme_Black_NoTitleBar_Fullscreen).apply {
                         setContentView(BackgroundPlaybackLayout(context, backgroundPlayback).apply {
                             addView(view, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
                         })
                         window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                         setOnCancelListener { exitFullscreen() }; show()
+                        makePlayerFullscreen()
                     }
                     if (wasPlaying) restore()
                 }
@@ -233,6 +302,7 @@ fun YouTubePlayer(videoId: String, startSeconds: Int, modifier: Modifier = Modif
             }
         }
     }
+    LaunchedEffect(fullscreen, orientation) { fullscreen?.makePlayerFullscreen() }
     LaunchedEffect(webView, videoId, title, audioMode) {
         if (audioMode) return@LaunchedEffect
         if (loadedId != videoId) {

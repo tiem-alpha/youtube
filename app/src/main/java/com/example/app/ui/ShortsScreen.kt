@@ -31,7 +31,8 @@ fun ShortsScreen(vm: VideoViewModel, modifier: Modifier, open: (VideoResult) -> 
             val video = videos[index]
             Column(Modifier.fillMaxSize()) {
                 if (index == pager.settledPage) {
-                    key(video.id) { YouTubePlayer(video.id, 0, Modifier.fillMaxWidth().weight(1f), { vm.recordVideo(video, it) }) }
+                    key(video.id) { YouTubePlayer(video.id, 0, Modifier.fillMaxWidth().weight(1f), { vm.recordVideo(video, it) },
+                        onOpenVideo = { id -> open(VideoResult(id, "Video YouTube", "YouTube", "https://i.ytimg.com/vi/$id/hqdefault.jpg")) }) }
                 } else RemoteImage(video.thumbnailUrl, Modifier.fillMaxWidth().weight(1f))
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(video.title, maxLines = 2, style = MaterialTheme.typography.titleSmall)

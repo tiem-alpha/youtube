@@ -100,7 +100,7 @@ fun WatchScreen(vm: VideoViewModel, auth: Authorize, initial: VideoResult, modif
         if (video.title.isBlank() || video.title == "Video YouTube") return@LaunchedEffect
         relatedLoading = true; relatedError = null
         try {
-            related = vm.repository.feed(FeedRequest(FeedKind.Search, query = video.title.take(100))).items.filterNot { it.id == video.id }
+            related = vm.suggestedVideos(video)
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) { relatedError = errorMessage(e) }
         finally { relatedLoading = false }
@@ -173,8 +173,8 @@ fun WatchScreen(vm: VideoViewModel, auth: Authorize, initial: VideoResult, modif
             if (commentsOnly && next != null && !commentsLoading) item { TextButton({ loadComments(true) }) { Text("Thêm bình luận") } }
             if (!commentsOnly) {
             item {
-                Text("Video cùng chủ đề", style = MaterialTheme.typography.titleMedium)
-                Text("Kết quả tìm kiếm theo tiêu đề video", style = MaterialTheme.typography.bodySmall)
+                Text("Video gợi ý", style = MaterialTheme.typography.titleMedium)
+                Text("Kết hợp video đang xem và các chủ đề bạn đã xem", style = MaterialTheme.typography.bodySmall)
             }
             if (relatedLoading) item { Loading() }
             relatedError?.let { item { MessageCard(it, "Thử lại", { relatedRetry++ }) } }

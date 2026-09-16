@@ -174,6 +174,11 @@ private fun VideoApp(incoming: String?, inPip: Boolean, consumed: () -> Unit, vm
                 TopAppBar(title = { if (showSearch) OutlinedTextField(query, { query = it }, singleLine = true,
                     modifier = Modifier.fillMaxWidth(), placeholder = { Text("Tìm trên YouTube") },
                     shape = RoundedCornerShape(24.dp),
+                    trailingIcon = {
+                        if (query.isNotEmpty()) IconButton({ query = "" }) {
+                            Icon(Icons.Default.Close, "Xóa nội dung tìm kiếm")
+                        }
+                    },
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
                     keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { submitSearch(query) }))
                     else Text(when(route) { "watch" -> "Đang xem"; "channel" -> "Kênh YouTube"; "playlist" -> playlistTitle; "settings" -> "Cài đặt"; else -> "Video Companion" }, maxLines = 1, overflow = TextOverflow.Ellipsis) },
@@ -291,6 +296,7 @@ private fun VideoApp(incoming: String?, inPip: Boolean, consumed: () -> Unit, vm
                         run {
                             val start = remember(video.id) { library.history.firstOrNull { it.video.id == video.id }?.positionSeconds ?: 0 }
                             YouTubePlayer(video.id, start, Modifier.fillMaxWidth().height(if (expanded) 236.dp else 90.dp),
+                                onOpenVideo = { id -> openVideo(VideoResult(id, "Video YouTube", "YouTube", "https://i.ytimg.com/vi/$id/hqdefault.jpg")) },
                                 onProgress = { seconds -> activeVideo?.let { vm.recordVideo(it, seconds) } },
                                 onEnded = {
                                     activeVideo?.let { vm.recordVideo(it, 0) }
